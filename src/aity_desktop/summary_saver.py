@@ -1,10 +1,10 @@
 import json
-import state
+import aity_desktop.state as state
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from analysis_formatter import normalize_keyword_labels, normalize_topic_labels, stringify_analysis_items
-from file_reader import read_file
+from aity_desktop.analysis_formatter import normalize_keyword_labels, normalize_topic_labels, stringify_analysis_items
+from aity_desktop.file_reader import read_file
 
 
 """

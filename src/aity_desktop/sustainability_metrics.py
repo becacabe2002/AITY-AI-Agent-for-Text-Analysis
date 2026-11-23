@@ -7,7 +7,7 @@ import os
 import time
 from typing import Any, Callable
 
-from ai_config import get_mode_display_name, normalize_analysis_mode
+from aity_desktop.ai_config import get_mode_display_name, normalize_analysis_mode
 
 try:
     import psutil

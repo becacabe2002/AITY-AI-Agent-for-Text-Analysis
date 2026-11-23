@@ -1,5 +1,6 @@
 python_test/
 __pycache__/
 *.pyc
-src/output/
+src/output/aity_desktop/output/
 **/user_data.json
+.venv

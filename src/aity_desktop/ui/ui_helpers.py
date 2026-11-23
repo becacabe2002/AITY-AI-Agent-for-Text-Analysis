@@ -6,7 +6,7 @@ Reduces code duplication by providing helper functions for creating common compo
 """
 
 import tkinter as t
-from ui.ui_constants import UIConstants as C
+from aity_desktop.ui.ui_constants import UIConstants as C
 
 
 def create_hero_frame(parent, height=C.HERO_FRAME_HEIGHT, bg_color=C.BOX_COLOR):

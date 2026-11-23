@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-import state
+import aity_desktop.state as state
 
 """
 Comparison Module

@@ -2,9 +2,9 @@
 from google import genai
 import json
 import re
-import state
-from ai_config import normalize_analysis_mode
-from sustainability_metrics import (
+import aity_desktop.state as state
+from aity_desktop.ai_config import normalize_analysis_mode
+from aity_desktop.sustainability_metrics import (
     build_token_usage,
     extract_ecologits_metrics,
     run_with_codecarbon_tracking,
@@ -26,12 +26,12 @@ Supports fallback between modes and format handling for both services.
 """
 
 try:
-    from keybert_analyzer import get_keybert_keywords
+    from aity_desktop.keybert_analyzer import get_keybert_keywords
 except ImportError:
     get_keybert_keywords = None
 
 try:
-    from bertopic_analyzer import get_bertopic_topics
+    from aity_desktop.bertopic_analyzer import get_bertopic_topics
 except ImportError:
     get_bertopic_topics = None
 

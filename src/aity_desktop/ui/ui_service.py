@@ -15,14 +15,14 @@ import tkinter as t
 from tkinter import filedialog, messagebox
 import threading
 
-from ai_config import get_mode_display_name
-from file_reader import read_file, validate_and_read_file
-from analysis import get_analysis_result, json_to_text
-from analysis_formatter import format_analysis_for_ui
-from summary_saver import save_summary
-from mode_switch import set_mode
-from comparison import compare_results
-import state
+from aity_desktop.ai_config import get_mode_display_name
+from aity_desktop.file_reader import read_file, validate_and_read_file
+from aity_desktop.analysis import get_analysis_result, json_to_text
+from aity_desktop.analysis_formatter import format_analysis_for_ui
+from aity_desktop.summary_saver import save_summary
+from aity_desktop.mode_switch import set_mode
+from aity_desktop.comparison import compare_results
+import aity_desktop.state as state
 
 
 class UIService:

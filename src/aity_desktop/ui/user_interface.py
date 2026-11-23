@@ -2,21 +2,21 @@
 import tkinter as t
 from tkinter import filedialog, messagebox
 import threading
-from ai_config import get_mode_display_name, setup_environment
-from summary_saver import save_summary
-from mode_switch import set_mode, change_API_key
-from analysis import json_to_text
-from ui.ui_constants import UIConstants as C
-from file_reader import read_file, validate_and_read_file
-from analysis_formatter import format_analysis_for_ui
-from sustainability_metrics import format_sustainability_for_ui
-from ui.ui_service import UIService
-from ui.ui_helpers import (
+from aity_desktop.ai_config import get_mode_display_name, setup_environment
+from aity_desktop.summary_saver import save_summary
+from aity_desktop.mode_switch import set_mode, change_API_key
+from aity_desktop.analysis import json_to_text
+from aity_desktop.ui.ui_constants import UIConstants as C
+from aity_desktop.file_reader import read_file, validate_and_read_file
+from aity_desktop.analysis_formatter import format_analysis_for_ui
+from aity_desktop.sustainability_metrics import format_sustainability_for_ui
+from aity_desktop.ui.ui_service import UIService
+from aity_desktop.ui.ui_helpers import (
     create_hero_frame, create_centered_label, create_button,
     create_upload_box, create_info_label, create_stat_box
 )
-import analysis as a
-import state
+import aity_desktop.analysis as a
+import aity_desktop.state as state
 
 
 """

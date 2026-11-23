@@ -16,7 +16,19 @@ AITY – AI Agent for text analysis. AITY is a concept or project of automatic t
 -	Document implementation options local versus public agent
 -	Experimental results on a given dataset
 
-## How to use
+## Repository layout
+
+```
+src/
+├── aity_desktop/   # the original Tkinter desktop app (Gemini + BERTs modes) — frozen, bug fixes only
+└── aity_web/       # the new multi-user web service (FastAPI + Vue 3) — in development
+web_ui/             # web service backend (FastAPI) and frontend (Vue 3) — in development
+tests/
+```
+
+`aity_desktop` is kept fully runnable but frozen until a further decision. The web service is built separately in `aity_web` and never imports `aity_desktop`. See `src/aity_desktop/README.md`.
+
+## How to use (desktop app)
 
 1. Download the repository:
 
@@ -66,14 +78,14 @@ source venv/bin/activate
 5. Download dependencies
 
 ```
-pip install -r requirements.txt
+pip install -r aity_desktop/requirements.txt
 
 ```
 
 6. Run the program
 
 ```
-python main.py
+python -m aity_desktop
 
 ```
 

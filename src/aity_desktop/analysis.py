@@ -1,12 +1,12 @@
 
 from pathlib import Path
 import json
-import summary_saver
-import send_prompt_online
-from ai_config import get_analysis_mode, validate_and_resolve_mode
-from file_reader import read_file
-from sustainability_metrics import SustainabilityRunTracker
-import state
+import aity_desktop.summary_saver as summary_saver
+import aity_desktop.send_prompt_online as send_prompt_online
+from aity_desktop.ai_config import get_analysis_mode, validate_and_resolve_mode
+from aity_desktop.file_reader import read_file
+from aity_desktop.sustainability_metrics import SustainabilityRunTracker
+import aity_desktop.state as state
 
 
 """
