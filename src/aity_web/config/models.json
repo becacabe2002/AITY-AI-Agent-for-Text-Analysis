@@ -1,0 +1,105 @@
+{
+  "catalog_version": 1,
+  "providers": {
+    "gemini": {
+      "display_name": "Google Gemini",
+      "models": [
+        {
+          "id": "gemini-3.5-flash-lite",
+          "display_name": "Gemini 3.5 Flash-Lite",
+          "tier": "fast",
+          "default": true,
+          "context_window": 1048576,
+          "latency_hint": "A few seconds",
+          "verified": "2026-11-24",
+          "notes": "Smoke-tested: 2.3 s, valid payload."
+        },
+        {
+          "id": "gemini-3.6-flash",
+          "display_name": "Gemini 3.6 Flash",
+          "tier": "balanced",
+          "context_window": 1048576,
+          "latency_hint": "A few seconds",
+          "verified": null,
+          "notes": "Not smoke-tested yet."
+        }
+      ]
+    },
+    "openai": {
+      "display_name": "OpenAI",
+      "models": [
+        {
+          "id": "gpt-5.4-mini-2026-03-17",
+          "display_name": "GPT-5.4 mini",
+          "tier": "balanced",
+          "default": true,
+          "context_window": 400000,
+          "latency_hint": "A few seconds",
+          "verified": "2026-11-24",
+          "notes": "Pinned snapshot, so results stay reproducible."
+        },
+        {
+          "id": "gpt-5.4-nano-2026-03-17",
+          "display_name": "GPT-5.4 nano",
+          "tier": "fast",
+          "context_window": null,
+          "latency_hint": "A few seconds",
+          "verified": null,
+          "notes": "Pinned snapshot. Not smoke-tested yet."
+        }
+      ]
+    },
+    "anthropic": {
+      "display_name": "Anthropic Claude",
+      "models": [
+        {
+          "id": "claude-haiku-5-5",
+          "display_name": "Claude Haiku 5.5",
+          "tier": "fast",
+          "default": true,
+          "context_window": 1000000,
+          "latency_hint": "A few seconds",
+          "verified": "2026-11-24",
+          "notes": "Native JSON outputs need Claude 4.5 or newer (ADR-002 C-iv)."
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "display_name": "Claude Sonnet 5.5",
+          "tier": "capable",
+          "context_window": 1000000,
+          "latency_hint": "5-20 seconds",
+          "verified": null,
+          "notes": "Not smoke-tested yet."
+        }
+      ]
+    },
+    "ollama": {
+      "display_name": "AITY Built-in",
+      "models": [
+        {
+          "id": "qwen3.5:4b",
+          "display_name": "Qwen 3.5 4B",
+          "tier": "balanced",
+          "default": true,
+          "context_window": 16384,
+          "prompt_profile": "small",
+          "options": {"num_ctx": 16384, "structured_output_mode": "grammar"},
+          "latency_hint": "About 1 minute for a short text, up to 8 minutes for a long paper (CPU only)",
+          "verified": "2026-11-24",
+          "notes": "W1 benchmark default (summary F1 ~0.70). think=False is forced by the adapter."
+        },
+        {
+          "id": "gemma3:4b",
+          "display_name": "Gemma 3 4B",
+          "tier": "fast",
+          "context_window": 16384,
+          "prompt_profile": "small",
+          "options": {"num_ctx": 16384, "structured_output_mode": "grammar"},
+          "latency_hint": "About 1 minute for a short text, up to 6 minutes for a long paper (CPU only)",
+          "verified": null,
+          "notes": "W1 benchmark fast alternative (~330 s on the 8.5k-word paper, F1 ~0.64). Must be pulled by the operator."
+        }
+      ]
+    }
+  }
+}
