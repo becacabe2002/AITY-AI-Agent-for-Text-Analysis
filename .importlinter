@@ -1,0 +1,13 @@
+[importlinter]
+root_packages =
+    aity_web
+    aity_desktop
+include_external_packages = False
+
+[importlinter:contract:web-never-imports-desktop]
+name = aity_web must not import aity_desktop (ADR-001)
+type = forbidden
+source_modules =
+    aity_web
+forbidden_modules =
+    aity_desktop
