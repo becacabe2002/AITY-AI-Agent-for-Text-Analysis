@@ -1,0 +1,16 @@
+# --- LLM provider SDKs ---
+openai
+anthropic
+google-genai
+
+# --- Sustainability ---
+ecologits[openai,anthropic,google-genai]
+
+pydantic
+
+httpx
+
+# --- for testing ---
+pytest
+pytest-asyncio
+import-linter
