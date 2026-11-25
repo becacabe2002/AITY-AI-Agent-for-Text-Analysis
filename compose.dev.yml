@@ -1,0 +1,38 @@
+# Development database for aity_web (ADR-004). Not the production stack:
+# the W9 docker-compose.yml adds the backend, Ollama, frontend and nginx and
+# keeps Postgres data on the Pouta volume (/srv/aity/postgres).
+#
+#   docker compose -f compose.dev.yml up -d       # start
+#   alembic upgrade head                          # create / update the schema (repo root)
+#   alembic revision --autogenerate -m "..." --rev-id 000N   # draft a migration after editing tables.py
+#   docker compose -f compose.dev.yml down        # stop, keep data
+#   docker compose -f compose.dev.yml down -v     # stop and delete data
+#
+# Two databases: aity (development, AITY_DATABASE_URL) and aity_test
+# (AITY_TEST_DATABASE_URL, emptied by the opt-in tests).
+# Matching URLs are in .env.example.
+
+name: aity-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine            # major version pinned; same major on Pouta
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aity
+      POSTGRES_PASSWORD: ${AITY_DEV_DB_PASSWORD:-aity-dev}
+      POSTGRES_DB: aity
+      TZ: UTC
+    ports:
+      - "127.0.0.1:5432:5432"           # this machine only
+    volumes:
+      - aity-pg-dev:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aity -d aity"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  aity-pg-dev: {}

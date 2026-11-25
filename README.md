@@ -90,3 +90,30 @@ python -m aity_desktop
 ```
 
 7. Enjoy!
+
+## Development database (web service)
+
+The web service stores users, sessions, documents and analysis results in PostgreSQL 16 (ADR-004).
+
+1. Set `AITY_DATABASE_URL` in your shell (values for the dev compose file are in `.env.example`; Alembic and the app read the environment, not `.env`). The tests default to the compose `aity_test` database, so `AITY_TEST_DATABASE_URL` is only needed for another database.
+2. Start Postgres: `docker compose -f compose.dev.yml up -d`
+3. Create or update the schema from the repo root: `alembic upgrade head` (or `python -m aity_web.db.migrate` with `src` on the path).
+4. Database tests are opt-in and empty the `aity_test` database:
+   ```
+   # bash
+   AITY_DB_TESTS=1 python -m pytest tests/aity_web/test_repository_contract.py tests/db -v
+   # PowerShell
+   $env:AITY_DB_TESTS = "1"; python -m pytest tests/aity_web/test_repository_contract.py tests/db -v
+   ```
+
+### Changing the schema
+
+Requires Docker Desktop (Windows) or Docker Engine; `compose.dev.yml` pulls `postgres:16-alpine` on first start.
+
+1. Edit `src/aity_web/db/tables.py`.
+2. Bring the dev database to the current head: `alembic upgrade head`.
+3. Draft the migration: `alembic revision --autogenerate -m "add user_api_keys" --rev-id 0002` (written to `src/aity_web/db/migrations/versions/0002_add_user_api_keys.py`; use the next number in sequence).
+4. Review the draft with the checklist at the top of the file. Autogenerate misses CHECK changes on existing tables, turns renames into drop + add, and never writes data changes.
+5. Apply it (`alembic upgrade head`) and run `AITY_DB_TESTS=1 python -m pytest tests/db`, which checks upgrade/downgrade and fails if the migrated database and `tables.py` differ.
+
+Running `alembic revision --autogenerate` with no `tables.py` changes produces an empty migration (`pass`); delete it. Autogenerate compares `tables.py` with the database and does not read the Pydantic models, so a new top-level model field must be added to `tables.py` first.

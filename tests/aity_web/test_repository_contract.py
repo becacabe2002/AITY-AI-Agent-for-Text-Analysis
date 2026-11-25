@@ -1,18 +1,33 @@
 """Repository contract suite (ADR-004 §7.9).
 
-Every test runs against each backend in BACKENDS. W3 Group A: the in-memory
-fakes. W3 Group B adds "postgres" (opt-in, AITY_DB_TESTS=1), so the same
-tests prove the fakes behave like the database.
+Every test runs against each backend in BACKENDS, so the same tests prove the
+in-memory fakes behave like the database:
+
+* "memory"   - repositories/memory.py, always.
+* "postgres" - repositories/sqlalchemy/ on a real PostgreSQL, opt-in:
+
+      # bash (database from compose.dev.yml)
+      AITY_DB_TESTS=1 python -m pytest tests/aity_web/test_repository_contract.py tests/db -v
+      # PowerShell
+      $env:AITY_DB_TESTS = "1"; python -m pytest tests/aity_web/test_repository_contract.py tests/db -v
+
+  The database comes from AITY_TEST_DATABASE_URL (default: the compose.dev.yml
+  test database). Its name must contain "test": every test empties the tables.
+  The schema is brought to head with the Alembic migrations once per run.
 
 A backend fixture provides a fresh, empty store, a UnitOfWork factory and
 the controllable clock the repositories use for the timestamps they set.
+Credentials have no PostgreSQL table until W4, so those tests run on the
+fakes only.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable
 from uuid import UUID, uuid4
 
 import pytest
@@ -43,19 +58,82 @@ class Backend:
     name: str
     uow: Callable[[], UnitOfWork]
     clock: FakeClock
+    features: frozenset[str] = field(default_factory=frozenset)
 
 
-def _memory_backend() -> Backend:
+def requires(be: Backend, feature: str) -> None:
+    if feature not in be.features:
+        pytest.skip(f"{be.name}: no {feature} table until W4 (ADR-005)")
+
+
+@asynccontextmanager
+async def _memory_backend() -> AsyncIterator[Backend]:
     clock = FakeClock()
-    return Backend("memory", InMemoryStore(clock=clock).uow_factory, clock)
+    yield Backend("memory", InMemoryStore(clock=clock).uow_factory, clock, frozenset({"credentials"}))
 
 
-BACKENDS = {"memory": _memory_backend}
+# --- PostgreSQL (opt-in) ------------------------------------------------------------
+
+DB_TESTS = os.environ.get("AITY_DB_TESTS") == "1"
+DEFAULT_TEST_DATABASE_URL = "postgresql://aity:aity-dev@127.0.0.1:5432/aity_test"
+_TABLES = "analysis_results, documents, sessions, users"
 
 
-@pytest.fixture(params=sorted(BACKENDS))
-def backend(request) -> Backend:
-    return BACKENDS[request.param]()
+def postgres_test_url() -> str:
+    from aity_web.db import database_url
+
+    url = database_url(
+        os.environ.get("AITY_TEST_DATABASE_URL") or DEFAULT_TEST_DATABASE_URL,
+        env="AITY_TEST_DATABASE_URL",
+    )
+    from sqlalchemy.engine import make_url
+
+    if "test" not in (make_url(url).database or ""):
+        raise RuntimeError("AITY_TEST_DATABASE_URL must name a database containing 'test'")
+    return url
+
+
+
+
+@pytest.fixture(scope="session")
+def migrated_database() -> str:
+    """Bring the test database to head once per run (sync: Alembic runs its
+    own event loop)."""
+    from aity_web.db.migrate import upgrade
+
+    url = postgres_test_url()
+    upgrade(url)
+    return url
+
+
+@asynccontextmanager
+async def _postgres_backend(url: str) -> AsyncIterator[Backend]:
+    from sqlalchemy import pool, text
+
+    from aity_web.db import make_engine, make_session_factory, make_uow_factory
+
+    engine = make_engine(url, poolclass=pool.NullPool)  # one event loop per test
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f"TRUNCATE {_TABLES} CASCADE"))
+        clock = FakeClock()
+        yield Backend("postgres", make_uow_factory(make_session_factory(engine), clock=clock), clock)
+    finally:
+        await engine.dispose()
+
+
+BACKENDS = ["memory"] + (["postgres"] if DB_TESTS else [])
+
+
+@pytest_asyncio.fixture(params=BACKENDS)
+async def backend(request) -> AsyncIterator[Backend]:
+    if request.param == "postgres":
+        url = request.getfixturevalue("migrated_database")
+        async with _postgres_backend(url) as be:
+            yield be
+    else:
+        async with _memory_backend() as be:
+            yield be
 
 
 # --- builders --------------------------------------------------------------------
@@ -389,6 +467,7 @@ async def test_analysis_delete_clears_served_from_on_copies(world):
 
 
 async def test_credential_upsert_get_list_delete(backend):
+    requires(backend, "credentials")
     uid = await make_user(backend)
     async with backend.uow() as uow:
         assert await uow.credentials.get(user_id=uid, provider="gemini") is None
@@ -407,12 +486,14 @@ async def test_credential_upsert_get_list_delete(backend):
 
 
 async def test_credential_for_unknown_user_not_found(backend):
+    requires(backend, "credentials")
     async with backend.uow() as uow:
         with pytest.raises(NotFoundError):
             await uow.credentials.upsert(user_id=uuid4(), provider="openai", ciphertext=b"c")
 
 
 async def test_credentials_are_per_user(backend):
+    requires(backend, "credentials")
     alice, bob = await make_user(backend, "alice"), await make_user(backend, "bob")
     async with backend.uow() as uow:
         await uow.credentials.upsert(user_id=alice, provider="openai", ciphertext=b"a")

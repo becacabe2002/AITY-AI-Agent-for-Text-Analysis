@@ -5,3 +5,4 @@ src/aity_desktop/output/
 **/user_data.json
 .venv*
 .env
+var/
