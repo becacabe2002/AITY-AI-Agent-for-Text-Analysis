@@ -13,6 +13,11 @@ httpx
 # sustainability_constants.toml (tomllib is built in from Python 3.11)
 tomli>=2.0; python_version < "3.11"
 
+# --- Database (ADR-004) ---
+sqlalchemy[asyncio]>=2.0,<2.1
+asyncpg>=0.29
+alembic>=1.16
+
 # --- for testing ---
 pytest
 pytest-asyncio
