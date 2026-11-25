@@ -1,0 +1,31 @@
+# Merge into the repo-root docker-compose.yml (W9). Only the ollama service and the backend env are shown.
+services:
+  ollama:
+    build: ./docker/ollama
+    init: true                  # tini as PID 1: forwards SIGTERM, reaps zombies
+    cgroup: private             # own cgroup namespace, so /sys/fs/cgroup/cpu.stat = this container
+    restart: unless-stopped
+    volumes:
+      - /srv/aity/ollama:/root/.ollama
+    expose:                     # internal network only — never add `ports:` here
+      - "11434"
+      - "8788"
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "/opt/shim/venv/bin/python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/internal/track/health', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  backend:
+    environment:
+      AITY_OLLAMA_BASE_URL: http://ollama:11434      # native /api/chat; no /v1 suffix
+      AITY_OLLAMA_SHIM_URL: http://ollama:8788
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks: [internal]
+
+networks:
+  internal: {}
