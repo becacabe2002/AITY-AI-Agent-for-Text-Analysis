@@ -10,6 +10,9 @@ pydantic
 
 httpx
 
+# sustainability_constants.toml (tomllib is built in from Python 3.11)
+tomli>=2.0; python_version < "3.11"
+
 # --- for testing ---
 pytest
 pytest-asyncio

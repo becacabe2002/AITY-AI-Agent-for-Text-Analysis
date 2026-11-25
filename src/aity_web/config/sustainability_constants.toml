@@ -1,0 +1,30 @@
+# AITY Built-in energy estimate — constants (ADR-003 §4, §7.5)
+# Read by the BACKEND (aity_web.services.aity_cpu_model); the ollama-container
+# shim only reports raw CPU-time readings, so changing a value here never
+# needs a new ollama image.
+# Changing any value: edit it, bump constants_version, redeploy the backend.
+# Old rows keep the values they were computed with in their warnings[] entry.
+# Override the file location with $AITY_SUSTAINABILITY_CONSTANTS.
+constants_version = 1
+
+# Assumed host CPU: Intel Xeon Gold 6230 (Cascade Lake, used in CSC Puhti),
+# 125 W TDP / 40 hardware threads. One Pouta vCPU ~ one hyperthread.
+# Lower bound ~2.2 W (idle share removed) is documented, not used.
+W_PER_VCPU = 3.125
+
+# DRAM convention: 3 W per 8 GB (as used by CodeCarbon).
+W_PER_GB_RAM = 0.375
+
+# EN 50600-based measurement for CSC Kajaani (Theseus thesis); CSC reports 1.03 (2020).
+# Assumes Pouta is hosted in Kajaani — to be confirmed with CSC.
+PUE = 1.08
+
+# Fingrid: 2025 average emission factor of electricity consumed in Finland, 26 g CO2/kWh
+# (location-based).
+GRID_KG_PER_KWH = 0.026
+
+# Used only when Ollama's /api/ps can't report the loaded model's size.
+DEFAULT_MODEL_RESIDENT_GB = 4.2
+
+[model_resident_gb]
+"qwen3.5:4b" = 4.2
