@@ -33,8 +33,9 @@ Rules for analyze():
 
 Still to come: the ADR-008 one-shot retry (W6, inside analyze()), the
 content-hash cache lookup (W6, inside run_analysis()), truncation (ADR-007),
-the async job queue and concurrency ceiling (ADR-006, W5), and
-ProviderError(kind=...) mapping of SDK exceptions (ADR-002 §7.7).
+and the async job queue and concurrency ceiling (ADR-006, W5).
+Provider exceptions arrive as ProviderError(kind=...) from ModelHandle
+(ADR-002 §7.7); their user_message becomes the outcome's `error`.
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from uuid import UUID, uuid4
 import httpx
 from pydantic import ValidationError
 
+from aity_web.llm.errors import ProviderError
 from aity_web.llm.providers.base import FinishReason, ProviderResponse
 from aity_web.llm.prompts import RenderedPrompt, render_prompt
 from aity_web.llm.registry import LLMProviderRegistry, ModelHandle, build_default_registry
@@ -236,14 +238,17 @@ async def _call(
             response_schema=llm_analysis_payload_schema(),
         )
         return resp, None
-    except Exception as exc:  # SDK errors propagate from adapters (ADR-002 §7.7)
-        log.warning("%s/%s: provider call failed", handle.provider, handle.model, exc_info=True)
+    except Exception as exc:  # ProviderError from ModelHandle, or an unexpected error
+        log.warning("%s/%s: provider call failed: %s", handle.provider, handle.model, exc, exc_info=True)
         return None, exc
 
 
 def _call_error_text(exc: Exception) -> str:
-    """Sanitised: the exception type only. SDK messages can echo request
-    details, so the full text stays in the log (W3 adds ProviderError kinds)."""
+    """Sanitised. ProviderError: its user_message (no SDK text). Anything
+    else: the exception type only, because its message can echo request
+    details; the full text stays in the log."""
+    if isinstance(exc, ProviderError):
+        return exc.user_message
     return f"provider call failed ({type(exc).__name__})"
 
 

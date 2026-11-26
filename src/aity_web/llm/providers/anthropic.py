@@ -6,8 +6,8 @@
   offered for sessions.
 * Thinking is off unless the caller passes `thinking` (the API's own dict,
   e.g. {"type": "enabled", "budget_tokens": 2048}).
-* SDK exceptions (anthropic.APIError) propagate unchanged; the service layer
-  maps them to user-facing errors.
+* SDK exceptions (anthropic.APIError) propagate unchanged; ModelHandle
+  maps them to ProviderError (aity_web.llm.errors).
 """
 
 from __future__ import annotations

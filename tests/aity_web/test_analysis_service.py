@@ -188,6 +188,23 @@ async def test_provider_exception_becomes_sanitised_failure():
     assert out.sustainability.estimate_status == "unavailable"
 
 
+
+@pytest.mark.asyncio
+async def test_sdk_error_becomes_provider_error_message():
+    import httpx
+    import openai
+
+    req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    exc = openai.AuthenticationError(
+        "Incorrect API key provided: sk-SECRET", response=httpx.Response(401, request=req), body=None
+    )
+    reg, *_ = _registry(exc)
+    out = await analyze(DOC, GEMINI, api_key="k", registry=reg)
+    assert out.status == "failed"
+    assert out.error == "The provider rejected the API key. Check the key saved in your account settings."
+    assert "SECRET" not in out.error
+
+
 # --- Ollama shim ordering ---
 
 
@@ -217,7 +234,8 @@ async def test_ollama_shim_stopped_even_when_call_fails():
     reg, *_ = _registry(ollama_result=TimeoutError("read timeout"))
     out = await analyze(DOC, OLLAMA, registry=reg, shim=FakeShim(events, TRACK))
     assert events == ["start", "stop"]
-    assert out.status == "failed" and out.error == "provider call failed (TimeoutError)"
+    assert out.status == "failed"
+    assert out.error == "The provider did not answer in time. Try again later."
 
 
 @pytest.mark.asyncio

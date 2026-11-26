@@ -17,6 +17,9 @@ against the model catalogue.
   between users. create() refuses any other model of a pinned provider
   (ModelNotActiveError); catalog.model() still resolves it for display.
 * ApiKeyService asks requires_api_key(name); Ollama never needs a key.
+* ModelHandle.complete() is the one place provider exceptions are mapped:
+  SDK, Ollama and transport errors become ProviderError(kind=...) chained
+  to the original (ADR-002 §7.7); other exceptions pass through unchanged.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from aity_web.llm.catalog import (
     UnknownProviderError,
     load_catalog,
 )
+from aity_web.llm.errors import ProviderError, to_provider_error
 from aity_web.llm.providers.base import BaseProviderAdapter, ProviderResponse
 from aity_web.llm.types import PROVIDER_NAMES, Message
 
@@ -50,7 +54,8 @@ class ModelHandle:
     """An adapter bound to one catalogue model; what create() returns.
 
     complete() fills in `model` and the catalogue's default options;
-    kwargs given at call time override those defaults.
+    kwargs given at call time override those defaults. Provider errors are
+    raised as ProviderError (see aity_web.llm.errors).
     """
 
     provider: str
@@ -78,14 +83,22 @@ class ModelHandle:
         response_schema: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> ProviderResponse:
-        return await self.adapter.complete(
-            api_key=api_key,
-            model=self.spec.id,
-            messages=messages,
-            system_prompt=system_prompt,
-            response_schema=response_schema,
-            **{**self.spec.options, **kwargs}, # values passed at calltime can override catalogue defaults.
-        )
+        try:
+            return await self.adapter.complete(
+                api_key=api_key,
+                model=self.spec.id,
+                messages=messages,
+                system_prompt=system_prompt,
+                response_schema=response_schema,
+                **{**self.spec.options, **kwargs}, # values passed at calltime can override catalogue defaults.
+            )
+        except ProviderError:
+            raise
+        except Exception as exc:
+            mapped = to_provider_error(self.provider, exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
 
 
 class LLMProviderRegistry:

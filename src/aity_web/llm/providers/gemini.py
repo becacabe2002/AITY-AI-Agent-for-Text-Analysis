@@ -2,8 +2,8 @@
 
 * Structured output uses `response_json_schema` (full JSON Schema), not the
   legacy OpenAPI-subset `response_schema`.
-* SDK exceptions (google.genai.errors.APIError) propagate unchanged; the
-  service layer maps them to user-facing errors.
+* SDK exceptions (google.genai.errors.APIError) propagate unchanged;
+  ModelHandle maps them to ProviderError (aity_web.llm.errors).
 """
 
 from __future__ import annotations
