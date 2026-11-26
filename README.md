@@ -64,6 +64,7 @@ Design notes live in [`docs/`](docs/), one note per aspect. Code docstrings only
 
 **Security**
 - [API keys (bring your own key)](docs/api-keys.md)
+- [Secrets: master key and JWT secret](docs/secrets.md)
 
 ## How to use (desktop app)
 

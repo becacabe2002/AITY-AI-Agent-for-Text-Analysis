@@ -5,7 +5,9 @@ Users supply their own keys for Gemini, OpenAI and Anthropic. AITY Built-in need
 ## Storage
 
 - A key is stored encrypted, together with the provider it belongs to. The provider is checked on every read, so a ciphertext copied onto another provider's row is rejected.
-- Encryption is pluggable. A fake, reversible encoding is used in tests and development only. Production uses a real cipher whose master key is supplied as a secret.
+- Each key is stored as one Fernet token that encrypts a small JSON payload: the key, its provider, and optionally a base URL and extra settings. Fernet authenticates the token, so a tampered or foreign ciphertext is rejected rather than misread.
+- One master key encrypts every user's payload (flat Fernet). It is loaded from a file at startup; see [secrets](secrets.md). Per-user data keys and key rotation are future work.
+- The cipher sits behind a small interface, so tests can plug in another one; the service itself never falls back to a fake.
 - Keys are validated: printable characters only, no spaces, limited length.
 
 ## Handling rules
