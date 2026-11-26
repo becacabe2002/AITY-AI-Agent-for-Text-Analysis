@@ -1,24 +1,28 @@
-"""
-W2 STUB analysis service: one document, one provider call, no persistence.
+"""Analysis service: analyze() is the provider-only core; AnalysisService
+.run_analysis() puts it on a stored document and saves the result (ADR-004 §7.4).
 
-    outcome = await analyze(text, LLMConfig(provider="gemini", model="gemini-3.5-flash-lite"),
-                            api_key=key)
+    result = await AnalysisService(uow_factory, storage, apikeys).run_analysis(
+        user_id=uid, document_id=did, provider="gemini", model="gemini-3.5-flash-lite")
 
-It wires the W2 pieces together in the order the real service will use:
+run_analysis() - two short transactions, the LLM call with none open:
+  1. read: load the document (owner only), check the provider/model with the
+     registry, read + clean its text, compute content_hash, get the user's
+     API key from ApiKeyService (its own short read)
+  2. analyze() - no transaction open; can take minutes on AITY Built-in
+  3. write: map the AnalysisOutcome to an AnalysisResult (failed rows
+     included), insert it, bump the session's updated_at, commit
+The W5 job runner wraps run_analysis(); routes never call analyze() directly
+(a review rule, no import-linter contract). W6 adds the cache lookup between
+1 and 2 (ADR-008); truncation stays False until ADR-007.
+
+analyze(text, config, api_key) - one document, one provider call, no
+persistence. Its signature is unchanged since W2 so the unit tests and the
+smoke suite keep calling it:
 
     catalogue/registry -> prompt library -> [shim start] -> timed adapter.complete()
     -> [shim stop] -> parse + validate + normalise -> SustainabilityCollector
 
-Replaced in W3 by the session-aware service, which adds what this stub leaves out:
-* AnalysisResult rows (UUIDs, session/document/user, content_hash, timestamps)
-  and the repository layer (ADR-004)
-* ApiKeyService - here the caller passes the plaintext key
-* the ADR-008 one-shot retry (length / broken JSON) and content-hash caching
-* input truncation at the context window (ADR-007)
-* the async job queue and per-provider concurrency ceiling (ADR-006)
-* ProviderError(kind=...) mapping of SDK exceptions (ADR-002 §7.7)
-
-Rules kept from the ADRs so W3 can lift them as-is:
+Rules for analyze():
 * Config mistakes (unknown provider/model/variant, missing key, empty text)
   raise before any network call. Everything that goes wrong AFTER the call
   starts becomes status="failed" with a short sanitised `error`; the raw
@@ -26,16 +30,24 @@ Rules kept from the ADRs so W3 can lift them as-is:
 * latency_seconds times adapter.complete() only; the Ollama shim calls sit
   outside the timer (ADR-003 §7.3) and the shim is always stopped.
 * Sustainability never fails an analysis (the collector never raises).
+
+Still to come: the ADR-008 one-shot retry (W6, inside analyze()), the
+content-hash cache lookup (W6, inside run_analysis()), truncation (ADR-007),
+the async job queue and concurrency ceiling (ADR-006, W5), and
+ProviderError(kind=...) mapping of SDK exceptions (ADR-002 §7.7).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import lru_cache
 from typing import Any, Literal
+from uuid import UUID, uuid4
 
 import httpx
 from pydantic import ValidationError
@@ -50,20 +62,41 @@ from aity_web.models.analysis_payload import (
     normalize_payload,
     payload_issues,
 )
-from aity_web.models.llm_config import LLMConfig
+from aity_web.models.analysis_result import AnalysisResult
+from aity_web.models.document import Document
+from aity_web.models.llm_config import DEFAULT_PROMPT_VARIANT, LLMConfig
 from aity_web.models.sustainability import SustainabilityMetrics
+from aity_web.repositories.base import ConflictError, NotFoundError
+from aity_web.services._common import Clock, UowFactory, utc_now
+from aity_web.services.apikey_service import ApiKeyService
+from aity_web.services.cache_key import CACHE_KEY_VERSION, clean_text, content_hash, text_sha256
 from aity_web.services.ollama_track_shim import OllamaTrackShim
 from aity_web.services.sustainability import collect, init_ecologits, wall_clock
+from aity_web.services.upload_storage import UploadStorage
 
 log = logging.getLogger(__name__)
 
 AnalysisStatus = Literal["ok", "partial", "failed"]
+
+ANALYSIS_PROMPT_VARIANT = DEFAULT_PROMPT_VARIANT
+"""The operator's prompt variant for analyses; requests never choose one."""
 
 _RAW_LOG_CHARS = 2000
 
 
 class MissingApiKeyError(ValueError):
     """A BYOK provider was called without an API key."""
+
+
+class DocumentTextError(RuntimeError):
+    """The document's stored text file is missing, unreadable, or no longer
+    matches the text_sha256 recorded at upload. Raised before any provider
+    call; the message is safe to show (no path, no text)."""
+
+
+class DocumentGoneError(NotFoundError):
+    """The document (or its session) was deleted while the analysis ran;
+    the result was not saved."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +260,7 @@ def _response_failure(resp: ProviderResponse) -> str | None:
 
 
 @asynccontextmanager
-async def _shim_scope(shim: OllamaTrackShim | None) -> AsyncIterator[OllamaTrackShim]:
+async def _shim_scope(shim: OllamaTrackShim | None) -> AsyncGenerator[OllamaTrackShim]:
     """Yield the injected shim, or a temporary one with its own httpx client."""
     if shim is not None:
         yield shim
@@ -236,4 +269,186 @@ async def _shim_scope(shim: OllamaTrackShim | None) -> AsyncIterator[OllamaTrack
         yield OllamaTrackShim(client)
 
 
-__all__ = ["AnalysisOutcome", "AnalysisStatus", "MissingApiKeyError", "analyze", "default_registry"]
+# --- run_analysis(): the stored-document path (ADR-004 §7.4) ---
+
+
+def outcome_to_result(
+    outcome: AnalysisOutcome,
+    *,
+    analysis_id: UUID,
+    document: Document,
+    content_hash: str,
+    created_at: datetime,
+    finished_at: datetime,
+    cache_key_version: int = CACHE_KEY_VERSION,
+) -> AnalysisResult:
+    """Map what analyze() returned to the row that gets stored.
+
+    status   payload   token_usage                         error
+    ok       set       outcome.usage                       None
+    partial  set       outcome.usage                       issues joined with "; "
+    failed   None      usage if a response arrived, else   outcome.error
+                       None (the call raised)
+    """
+    if outcome.status == "failed":
+        token_usage = outcome.usage if outcome.finish_reason is not None else None
+        error = outcome.error or "analysis failed"
+    else:
+        token_usage = outcome.usage
+        error = "; ".join(outcome.issues) if outcome.status == "partial" else None
+    return AnalysisResult(
+        analysis_id=analysis_id,
+        session_id=document.session_id,
+        document_id=document.id,
+        user_id=document.user_id,
+        provider=outcome.provider,
+        model=outcome.model,
+        prompt_variant=outcome.prompt_variant,
+        payload=outcome.payload if outcome.status != "failed" else None,
+        token_usage=token_usage,
+        sustainability=outcome.sustainability,
+        content_hash=content_hash,
+        cache_key_version=cache_key_version,
+        truncated=False,  # ADR-007
+        status=outcome.status,
+        error=error,
+        created_at=created_at,
+        finished_at=finished_at,
+    )
+
+
+class AnalysisService:
+    """Analyses of stored documents. One instance per process (W5 builds it
+    with the real unit-of-work factory, UploadStorage and ApiKeyService)."""
+
+    def __init__(
+        self,
+        uow_factory: UowFactory,
+        storage: UploadStorage,
+        apikeys: ApiKeyService,
+        *,
+        registry: LLMProviderRegistry | None = None,
+        shim: OllamaTrackShim | None = None,
+        clock: Clock = utc_now,
+        new_id: Callable[[], UUID] = uuid4,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._storage = storage
+        self._apikeys = apikeys
+        self._registry = registry
+        self._shim = shim
+        self._clock = clock
+        self._new_id = new_id
+
+    async def run_analysis(
+        self, *, user_id: UUID, document_id: UUID, provider: str, model: str
+    ) -> AnalysisResult:
+        """Analyse one of the user's documents and store the result.
+
+        Raises before any provider call (nothing is stored):
+        * NotFoundError (document missing or not the user's)
+        * UnknownProviderError
+        * UnknownModelError
+        * ModelNotActiveError (ADR-009, HTTP 422 in W5)
+        * DocumentTextError
+        * MissingApiKeyError
+        * StoredKeyUnreadableError
+        and the prompt errors of analyze().
+
+        Raises after the call: 
+        * DocumentGoneError if the document was deleted meanwhile (the result is dropped and logged).
+        
+        Every other outcome, failed included, is stored and returned."""
+        registry = self._registry or default_registry()
+
+        # --- 1. read: one short transaction for the row ---
+        async with self._uow_factory() as uow:
+            document = await uow.documents.get(user_id=user_id, document_id=document_id)
+
+        handle = registry.create(provider, model)  # unknown / inactive model: refuse early
+        config = LLMConfig(provider=provider, model=handle.model,
+                           prompt_variant=ANALYSIS_PROMPT_VARIANT)
+        text = await self._load_text(document)
+        key = content_hash(text_sha256=document.text_sha256, provider=config.provider,
+                           model=config.model, prompt_variant=config.prompt_variant)
+        # W6: per-user cache lookup on (key, CACHE_KEY_VERSION) goes here (ADR-008)
+
+        api_key: str | None = None
+        if handle.requires_api_key:
+            api_key = await self._apikeys.get_key(user_id=user_id, provider=provider)
+            if not api_key:
+                raise MissingApiKeyError(f"no {provider} API key is saved for this account")
+
+        # --- 2. the LLM call, no transaction open ---
+        created_at = self._clock()
+        outcome = await analyze(text, config, api_key, registry=registry, shim=self._shim)
+        del api_key  # the plaintext key lives no longer than the call
+        finished_at = self._clock()
+
+        result = outcome_to_result(
+            outcome, analysis_id=self._new_id(), document=document,
+            content_hash=key, created_at=created_at, finished_at=finished_at,
+        )
+
+        # --- 3. write: one short transaction ---
+        try:
+            async with self._uow_factory() as uow:
+                await uow.analyses.add(user_id=user_id, result=result)
+                await uow.sessions.touch(user_id=user_id, session_id=document.session_id)
+                await uow.commit()
+        except (NotFoundError, ConflictError) as exc:
+            log.warning(
+                "analysis %s of document %s dropped: the document was deleted during the call (%s)",
+                result.analysis_id, document_id, type(exc).__name__,
+            )
+            raise DocumentGoneError(
+                "the document was deleted while it was being analysed"
+            ) from exc
+        return result
+
+    async def get(self, *, user_id: UUID, analysis_id: UUID) -> AnalysisResult:
+        async with self._uow_factory() as uow:
+            return await uow.analyses.get(user_id=user_id, analysis_id=analysis_id)
+
+    async def list_for_document(self, *, user_id: UUID, document_id: UUID) -> list[AnalysisResult]:
+        """Newest first. NotFoundError if the document is missing or not the user's."""
+        async with self._uow_factory() as uow:
+            return await uow.analyses.list_for_document(user_id=user_id, document_id=document_id)
+
+    async def list_for_session(self, *, user_id: UUID, session_id: UUID) -> list[AnalysisResult]:
+        """Newest first. NotFoundError if the session is missing or not the user's."""
+        async with self._uow_factory() as uow:
+            return await uow.analyses.list_for_session(user_id=user_id, session_id=session_id)
+
+    async def delete(self, *, user_id: UUID, analysis_id: UUID) -> None:
+        """Delete one result (no files involved)."""
+        async with self._uow_factory() as uow:
+            await uow.analyses.delete(user_id=user_id, analysis_id=analysis_id)
+            await uow.commit()
+
+    async def _load_text(self, document: Document) -> str:
+        """The cleaned text, checked against the hash recorded at upload."""
+        try:
+            raw = await asyncio.to_thread(self._storage.read_text, document.text_path)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            log.error("document %s: text file unreadable (%s)", document.id, type(exc).__name__)
+            raise DocumentTextError("the document's text could not be read") from None
+        text = clean_text(raw)
+        if text_sha256(text) != document.text_sha256:
+            log.error("document %s: text file does not match its upload hash", document.id)
+            raise DocumentTextError("the document's stored text has changed since upload")
+        return text
+
+
+__all__ = [
+    "ANALYSIS_PROMPT_VARIANT",
+    "AnalysisOutcome",
+    "AnalysisService",
+    "AnalysisStatus",
+    "DocumentGoneError",
+    "DocumentTextError",
+    "MissingApiKeyError",
+    "analyze",
+    "default_registry",
+    "outcome_to_result",
+]
