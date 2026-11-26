@@ -16,4 +16,4 @@ A version number is stored next to the hash. Lookups only match the current vers
 - adapter defaults or rules;
 - model behaviour changed by the operator outside the repository (bump by hand).
 
-A pinned test fails on the first three until its pins are updated. A prompt text change needs no bump, because new text ships under a new variant name that is part of the hash. See [prompt variants](prompt-variants.md).
+Field descriptions are part of the payload schema; class docstrings are not, so editing a docstring never changes what providers see. A pinned test fails on the first three until its pins are updated. A prompt text change needs no bump, because new text ships under a new variant name that is part of the hash. See [prompt variants](prompt-variants.md).

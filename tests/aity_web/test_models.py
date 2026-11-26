@@ -91,6 +91,18 @@ def test_schema_has_descriptions_everywhere():
     check(build_provider_schema(), "$")
 
 
+def test_class_docstrings_stay_out_of_the_schema():
+    # Pydantic copies a model's docstring into its schema "description"; docstrings
+    # are for developers, so editing one must never change what providers see.
+    from aity_web.models.analysis_payload import Topic
+
+    assert LLMAnalysisPayload.__doc__ and Topic.__doc__
+    schema = build_provider_schema()
+    assert "description" not in schema
+    assert "description" not in schema["properties"]["topics"]["items"]
+    assert schema["properties"]["topics"]["description"]  # field descriptions stay
+
+
 BANNED_KEYS = {
     "$ref", "$defs", "oneOf", "allOf", "anyOf", "not", "pattern", "minItems", "maxItems",
     "minLength", "maxLength", "default", "format", "enum", "const", "title",

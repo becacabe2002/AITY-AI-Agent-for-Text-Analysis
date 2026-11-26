@@ -60,10 +60,15 @@ def _inline(node: Any, defs: dict[str, Any]) -> Any:
         return [_inline(item, defs) for item in node]
     return node
 
+def _without_class_doc(schema: dict[str, Any]) -> dict[str, Any]:
+    """Drop the model-level description that Pydantic copies from the class docstring."""
+    return {k: v for k, v in schema.items() if k != "description"}
+
 def build_provider_schema() -> dict[str, Any]:
     """Build the self-contained JSON schema that is sent to providers."""
     raw = LLMAnalysisPayload.model_json_schema()
-    body = _inline(raw, raw.get("$defs", {}))
+    defs = {name: _without_class_doc(d) for name, d in raw.get("$defs", {}).items()}
+    body = _inline(_without_class_doc(raw), defs)
     return {"$schema": _JSON_SCHEMA_DIALECT, "title": "LLMAnalysisPayload", **body}
 
 @lru_cache(maxsize=1)
