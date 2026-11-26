@@ -21,8 +21,8 @@ AITY – AI Agent for text analysis. AITY is a concept or project of automatic t
 ```
 src/
 ├── aity_desktop/   # the original Tkinter desktop app (Gemini + BERTs modes) — frozen, bug fixes only
-└── aity_web/       # the new multi-user web service (FastAPI + Vue 3) — in development
-web_ui/             # web service backend (FastAPI) and frontend (Vue 3) — in development
+└── aity_web/       # the new multi-user web service — in development (FastAPI app planned in aity_web/api/)
+frontend/           # Vue 3 web frontend — planned
 tests/
 ```
 
