@@ -1,13 +1,4 @@
-"""Sessions: create, list, read, rename/describe, delete - ADR-004 §7.7, §7.8.
-
-A session only groups a user's documents; it holds no LLM configuration.
-Every call takes the caller's user_id; another user's session raises
-NotFoundError exactly like a missing one (the W5 routes return 404).
-
-Delete order: collect the text paths, delete the row (the database cascades
-to documents and analyses), commit, then remove the text files and the empty
-session folder. File removal runs after the commit and never raises.
-"""
+"""Service for creating, listing, updating and deleting sessions."""
 
 from __future__ import annotations
 
@@ -24,15 +15,17 @@ log = logging.getLogger(__name__)
 
 
 class SessionService:
+    """Session operations on behalf of one user at a time."""
+
     def __init__(self, uow_factory: UowFactory, storage: UploadStorage) -> None:
+        """Create the service with a unit-of-work factory and the upload storage."""
         self._uow_factory = uow_factory
         self._storage = storage
 
     async def create(
         self, *, user_id: UUID, name: str, description: str | None = None
     ) -> Session:
-        """Name 1-200 characters (stripped), description up to 2000 (blank -> None);
-        pydantic.ValidationError otherwise. NotFoundError if the user is unknown."""
+        """Create a session for the user."""
         async with self._uow_factory() as uow:
             session = await uow.sessions.add(user_id=user_id, name=name, description=description)
             await uow.commit()
@@ -41,11 +34,12 @@ class SessionService:
     async def list(
         self, *, user_id: UUID, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0
     ) -> list[Session]:
-        """Most recently updated first."""
+        """List the user's sessions, most recently updated first."""
         async with self._uow_factory() as uow:
             return await uow.sessions.list(user_id=user_id, limit=limit, offset=offset)
 
     async def get(self, *, user_id: UUID, session_id: UUID) -> Session:
+        """Return one of the user's sessions."""
         async with self._uow_factory() as uow:
             return await uow.sessions.get(user_id=user_id, session_id=session_id)
 
@@ -57,9 +51,7 @@ class SessionService:
         name: str | Unset = UNSET,
         description: str | None | Unset = UNSET,
     ) -> Session:
-        """Edit the name and/or description. Fields left UNSET keep their value;
-        description=None (or blank) clears it. Calling with neither field is a
-        no-op that returns the session unchanged (updated_at not bumped)."""
+        """Edit the name and/or description; with neither, return the session unchanged."""
         async with self._uow_factory() as uow:
             if name is UNSET and description is UNSET:
                 return await uow.sessions.get(user_id=user_id, session_id=session_id)
@@ -70,13 +62,14 @@ class SessionService:
         return session
 
     async def delete(self, *, user_id: UUID, session_id: UUID) -> None:
-        """Delete the session, its documents, their text files and their analyses."""
+        """Delete the session, its documents, their text files and its analyses."""
         async with self._uow_factory() as uow:
             text_paths = await uow.sessions.delete(user_id=user_id, session_id=session_id)
             await uow.commit()
         await asyncio.to_thread(self._remove_files, user_id, session_id, text_paths)
 
     def _remove_files(self, user_id: UUID, session_id: UUID, text_paths: list[str]) -> None:
+        """Remove text files and the empty session folder after the commit; failures are logged."""
         failed = sum(not self._storage.delete(p) for p in text_paths)
         self._storage.remove_session_dir(user_id=user_id, session_id=session_id)
         if failed:

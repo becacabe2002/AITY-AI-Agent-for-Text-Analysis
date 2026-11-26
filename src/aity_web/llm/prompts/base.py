@@ -1,20 +1,4 @@
-"""
-Prompt variant types and rendering.
-
-Rules:
-* Variant names are immutable (decided 2026-11-19, option B): once a name has
-  produced results, its text never changes. A text change ships under a new
-  name (default_analysis -> default_analysis_v2). tests/aity_web/test_prompts.py
-  pins a fingerprint per variant to catch accidental edits.
-* A variant has a "standard" template and optional per-profile overrides
-  ("small" = shorter, more directive text for small local models). The
-  profile comes from the model's catalogue entry, so (variant, model) always
-  resolves to the same text and the cache key needs only the variant name.
-* Templates use string.Template ($name) so JSON braces need no escaping.
-  A literal dollar sign is written $$.
-* The document goes in the user turn, never in the system prompt.
-* Placeholder variants reserve a name; they have no text and cannot render.
-"""
+"""Prompt variant types, validation and rendering."""
 
 from __future__ import annotations
 
@@ -70,6 +54,8 @@ def _identifiers(text: str) -> set[str]:
 
 @dataclass(frozen=True, slots=True)
 class PromptTemplate:
+    """A system and a user template with string.Template placeholders."""
+
     system: str
     user: str
 
@@ -96,6 +82,8 @@ class RenderedPrompt:
 
 @dataclass(frozen=True, slots=True)
 class PromptVariant:
+    """A named prompt: a standard template plus optional per-profile overrides."""
+
     name: str
     description: str
     status: PromptStatus = "active"
@@ -116,6 +104,7 @@ class PromptVariant:
 
     @property
     def available(self) -> bool:
+        """True for an active variant, false for a placeholder."""
         return self.status == "active"
 
     def template_for(self, profile: PromptProfile = "standard") -> PromptTemplate:
@@ -129,11 +118,7 @@ class PromptVariant:
     def render(
         self, document: str, *, profile: PromptProfile = "standard", **params: int
     ) -> RenderedPrompt:
-        """Fill the template for `profile`.
-
-        `params` override DEFAULT_PARAMS (e.g. the W3 LLMConfig limits). The
-        document is substituted as-is; a '$' inside it is not re-parsed.
-        """
+        """Fill the template for a profile with the document and parameters."""
         unknown = set(params) - set(DEFAULT_PARAMS)
         if unknown:
             raise ValueError(f"unknown prompt parameters: {sorted(unknown)}")
@@ -158,11 +143,7 @@ class PromptVariant:
         )
 
     def fingerprint(self) -> str:
-        """SHA-256 over every template of the variant (standard + overrides).
-
-        Changes whenever any text changes; the W4 prompt_variants table can
-        store it to reject edits to an existing name.
-        """
+        """Return a SHA-256 over every template of the variant."""
         h = hashlib.sha256(self.name.encode())
         templates: list[tuple[str, PromptTemplate]] = []
         if self.template is not None:

@@ -28,6 +28,43 @@ tests/
 
 `aity_desktop` is kept fully runnable but frozen until a further decision. The web service is built separately in `aity_web` and never imports `aity_desktop`. See `src/aity_desktop/README.md`.
 
+## Documentation
+
+Design notes live in [`docs/`](docs/), one note per aspect. Code docstrings only describe a single class or function; everything else is here.
+
+**Overview**
+- [Architecture overview](docs/architecture-overview.md)
+- [Domain models](docs/domain-models.md)
+- [API models](docs/api-models.md)
+
+**Analysis**
+- [Analysis flow](docs/analysis-flow.md)
+- [Analysis results](docs/analysis-results.md)
+- [Cache key](docs/cache-key.md)
+- [Prompt variants](docs/prompt-variants.md)
+- [Sustainability estimation](docs/sustainability-estimation.md)
+
+**Language models**
+- [LLM provider adapters](docs/llm-provider-adapters.md)
+- [Provider errors](docs/provider-errors.md)
+- [Model catalogue](docs/model-catalog.md)
+- [Model list fetching](docs/model-list-fetching.md)
+- [Ollama estimation shim](docs/ollama-shim.md)
+
+**Data and storage**
+- [Database layer](docs/database-layer.md)
+- [Development database](docs/development-database.md)
+- [Database schema](docs/database-schema.md)
+- [Database migrations](docs/database-migrations.md)
+- [Repository contract](docs/repository-contract.md)
+- [Unit of work](docs/unit-of-work.md)
+- [Document upload](docs/document-upload.md)
+- [Upload storage](docs/upload-storage.md)
+- [Sessions](docs/sessions.md)
+
+**Security**
+- [API keys (bring your own key)](docs/api-keys.md)
+
 ## How to use (desktop app)
 
 1. Download the repository:
@@ -90,76 +127,3 @@ python -m aity_desktop
 ```
 
 7. Enjoy!
-
-## Code layout: database layer (web service)
-
-Services never talk to SQL directly. They open a unit of work, call repository methods, and get domain models (`aity_web.models`) back. Design decisions are in ADR-004.
-
-```
-service (e.g. run_analysis, later the W5 routes)
-   │  async with uow_factory() as uow: ... await uow.commit()
-   ▼
-db/uow.py                 one AsyncSession = one transaction
-   │  uow.users / uow.sessions / uow.documents / uow.analyses
-   ▼
-repositories/sqlalchemy/  SQL queries, user_id filtering, errors
-   │  builds queries from
-   ▼
-db/tables.py              the schema (source of truth for Alembic too)
-   │  executed through
-   ▼
-db/engine.py              connection pool to PostgreSQL (asyncpg)
-```
-
-| File | Role |
-|---|---|
-| `src/aity_web/db/engine.py` | `database_url()` reads `AITY_DATABASE_URL` and switches it to `postgresql+asyncpg://` (other databases are refused); `make_engine()` builds the connection pool once at startup; `make_session_factory()` gives one `AsyncSession` per request or job. |
-| `src/aity_web/db/tables.py` | The four tables (`users`, `sessions`, `documents`, `analysis_results`) with columns, keys, CHECK rules and indexes. Every schema change starts here; Alembic autogenerate compares it with the database, and `tests/db` fails if the migrations and this file differ. Top-level fields of the Pydantic models must be mirrored here by hand. |
-| `src/aity_web/db/uow.py` | `SqlAlchemyUnitOfWork`: wraps one `AsyncSession` and exposes the repositories. `commit()` saves; leaving the `async with` block without committing (or with an error) rolls back. Supplies the clock for timestamps. `uow.credentials` raises `NotImplementedError` until W4. `make_uow_factory()` returns the zero-argument factory services receive. |
-| `src/aity_web/db/__init__.py` | Re-exports what other code needs (`make_engine`, `make_session_factory`, `make_uow_factory`, `database_url`, `metadata`, `SqlAlchemyUnitOfWork`). |
-| `src/aity_web/db/migrations/`, `db/migrate.py` | Alembic environment and migrations; `python -m aity_web.db.migrate` runs them without `alembic.ini`. |
-| `src/aity_web/repositories/base.py` | The repository interfaces (ABCs), errors and the `UnitOfWork` contract that both implementations follow. |
-| `src/aity_web/repositories/sqlalchemy/` | PostgreSQL implementations, one file per repository. Every query filters by `user_id`, so another user's row looks like a missing one (`NotFoundError`); results are domain models, never database rows; inserts run in a savepoint so a duplicate becomes `ConflictError` without breaking the transaction. `analyses.py` converts the JSONB blobs (`payload`, `token_usage`, `sustainability`) to and from their Pydantic models; `_common.py` holds the shared base class and error mapping. |
-| `src/aity_web/repositories/memory.py` | In-memory fakes of the same interfaces, used only in tests. |
-
-Wiring (what the W5 app startup will do):
-
-```python
-from aity_web.db import make_engine, make_session_factory, make_uow_factory
-
-engine = make_engine()                                   # AITY_DATABASE_URL
-uow_factory = make_uow_factory(make_session_factory(engine))
-
-async with uow_factory() as uow:
-    session = await uow.sessions.add(user_id=user_id, name="SMS pilot")
-    await uow.commit()
-```
-
-Tests pass `InMemoryStore().uow_factory` instead, so services cannot tell which one they use. `tests/aity_web/test_repository_contract.py` runs the same tests against both implementations (PostgreSQL opt-in with `AITY_DB_TESTS=1`), which proves they behave alike.
-
-## Development database (web service)
-
-The web service stores users, sessions, documents and analysis results in PostgreSQL 16 (ADR-004).
-
-1. Set `AITY_DATABASE_URL` in your shell (values for the dev compose file are in `.env.example`; Alembic and the app read the environment, not `.env`). The tests default to the compose `aity_test` database, so `AITY_TEST_DATABASE_URL` is only needed for another database.
-2. Start Postgres: `docker compose -f compose.dev.yml up -d`
-3. Create or update the schema from the repo root: `alembic upgrade head` (or `python -m aity_web.db.migrate` with `src` on the path).
-4. Database tests are opt-in and empty the `aity_test` database:
-   ```
-   # bash
-   AITY_DB_TESTS=1 python -m pytest tests/aity_web/test_repository_contract.py tests/db -v
-   # PowerShell
-   $env:AITY_DB_TESTS = "1"; python -m pytest tests/aity_web/test_repository_contract.py tests/db -v
-   ```
-
-### Changing the schema
-
-Requires Docker Desktop (Windows) or Docker Engine; `compose.dev.yml` pulls `postgres:16-alpine` on first start.
-
-1. Edit `src/aity_web/db/tables.py`.
-2. Bring the dev database to the current head: `alembic upgrade head`.
-3. Draft the migration: `alembic revision --autogenerate -m "add user_api_keys" --rev-id 0002` (written to `src/aity_web/db/migrations/versions/0002_add_user_api_keys.py`; use the next number in sequence).
-4. Review the draft with the checklist at the top of the file. Autogenerate misses CHECK changes on existing tables, turns renames into drop + add, and never writes data changes.
-5. Apply it (`alembic upgrade head`) and run `AITY_DB_TESTS=1 python -m pytest tests/db`, which checks upgrade/downgrade and fails if the migrated database and `tables.py` differ.
-
-Running `alembic revision --autogenerate` with no `tables.py` changes produces an empty migration (`pass`); delete it. Autogenerate compares `tables.py` with the database and does not read the Pydantic models, so a new top-level model field must be added to `tables.py` first.

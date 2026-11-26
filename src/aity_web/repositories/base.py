@@ -1,24 +1,4 @@
-"""Repository interfaces and the unit of work.
-
-Rules every implementation follows:
-
-* Every method of a user-owned row takes a keyword-only ``user_id`` and
-  filters by it. A row that does not exist and a row owned by another user
-  both raise NotFoundError, so callers cannot tell them apart.
-  UserRepository is the only exception (it looks users up).
-* Repositories return domain models (aity_web.models), never ORM objects.
-* Repositories never commit. The service opens a UnitOfWork, calls the
-  repositories and commits; leaving the block without commit() rolls back.
-* Ids and timestamps of rows created by a repository (users, sessions,
-  credentials) come from the repository and its clock. Documents and
-  analysis results arrive fully built by the service.
-* Deleting is cascading:
-  session -> its documents and analyses; document -> its analyses;
-  deleting an analysis clears served_from_analysis_id on rows copied from it.
-  Files are not touched here: the service removes them after the commit.
-
-Not in W3: find_cached() (W6, ADR-008), comparisons and syntheses (W8).
-"""
+"""Repository interfaces, errors and the unit-of-work contract."""
 
 from __future__ import annotations
 
@@ -48,14 +28,15 @@ class NotFoundError(RepositoryError, LookupError):
 
 
 class ConflictError(RepositoryError):
-    """The write breaks a uniqueness or reference rule (duplicate username,
-    duplicate id, a parent deleted by a concurrent transaction)."""
+    """The write breaks a uniqueness or reference rule."""
 
 
 # --- "leave unchanged" marker for partial updates ---
 
 
 class _Unset(Enum):
+    """Marker type for fields that an update must leave unchanged."""
+
     UNSET = "UNSET"
 
     def __repr__(self) -> str:
@@ -63,8 +44,7 @@ class _Unset(Enum):
 
 
 UNSET: Final = _Unset.UNSET
-"""Passed (or defaulted) for a field that update() must leave as it is.
-None is a real value: description=None clears the description."""
+"""Marker for a field that update() must leave as it is."""
 
 Unset = Literal[_Unset.UNSET]
 
@@ -75,38 +55,37 @@ DEFAULT_PAGE_SIZE = 50
 
 
 class UserRepository(ABC):
-    """Minimal in W3; registration and login arrive in W4."""
+    """Access to user accounts."""
 
     @abstractmethod
     async def add(self, *, username: str, password_hash: str) -> User:
-        """Create a user. ConflictError if the username is taken
-        (usernames are case-sensitive)."""
+        """Create a user; ConflictError if the username is taken."""
 
     @abstractmethod
     async def get(self, *, user_id: UUID) -> User:
-        """NotFoundError if there is no such user."""
+        """Return the user; NotFoundError if there is none."""
 
     @abstractmethod
     async def get_by_username(self, *, username: str) -> User | None:
-        """Exact, case-sensitive match; None if there is none."""
+        """Return the user with this exact username, or None."""
 
 
 class SessionRepository(ABC):
+    """Access to a user's sessions."""
+
     @abstractmethod
     async def add(self, *, user_id: UUID, name: str, description: str | None = None) -> Session:
-        """Create a session; created_at = updated_at = now.
-        NotFoundError if the user does not exist."""
+        """Create a session for the user."""
 
     @abstractmethod
     async def get(self, *, user_id: UUID, session_id: UUID) -> Session:
-        """NotFoundError if missing or not the user's."""
+        """Return one of the user's sessions."""
 
     @abstractmethod
     async def list(
         self, *, user_id: UUID, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0
     ) -> list[Session]:
-        """The user's sessions, most recently updated first (ties: id).
-        limit >= 1 and offset >= 0, else ValueError."""
+        """List the user's sessions, most recently updated first."""
 
     @abstractmethod
     async def update(
@@ -117,116 +96,88 @@ class SessionRepository(ABC):
         name: str | Unset = UNSET,
         description: str | None | Unset = UNSET,
     ) -> Session:
-        """Change the name and/or description and bump updated_at.
-        Fields left UNSET keep their value; description=None clears it.
-        NotFoundError if missing or not the user's."""
+        """Change the name and/or description and bump updated_at."""
 
     @abstractmethod
     async def touch(self, *, user_id: UUID, session_id: UUID) -> Session:
-        """Bump updated_at to now (a document or analysis was added).
-        NotFoundError if missing or not the user's."""
+        """Bump a session's updated_at to now."""
 
     @abstractmethod
     async def delete(self, *, user_id: UUID, session_id: UUID) -> list[str]:
-        """Delete the session with its documents and analyses.
-        Returns the deleted documents' text_paths for the service to remove
-        after the commit. NotFoundError if missing or not the user's."""
+        """Delete a session with its documents and analyses; return the text paths to remove."""
 
 
 class DocumentRepository(ABC):
+    """Access to a user's documents."""
+
     @abstractmethod
     async def add(self, *, user_id: UUID, document: Document) -> Document:
-        """Insert a document built by the service.
-        ValueError if document.user_id != user_id (a programming error).
-        NotFoundError if its session is missing or not the user's.
-        ConflictError if the id is already used."""
+        """Insert a document built by the service."""
 
     @abstractmethod
     async def get(self, *, user_id: UUID, document_id: UUID) -> Document:
-        """NotFoundError if missing or not the user's."""
+        """Return one of the user's documents."""
 
     @abstractmethod
     async def list_for_session(self, *, user_id: UUID, session_id: UUID) -> list[Document]:
-        """The session's documents, oldest upload first (ties: id).
-        NotFoundError if the session is missing or not the user's."""
+        """List a session's documents, oldest upload first."""
 
     @abstractmethod
     async def delete(self, *, user_id: UUID, document_id: UUID) -> Document:
-        """Delete the document and its analyses; returns the deleted row so
-        the service can remove its text file after the commit.
-        NotFoundError if missing or not the user's."""
+        """Delete a document and its analyses; return the deleted row."""
 
 
 class AnalysisRepository(ABC):
+    """Access to a user's analysis results."""
+
     @abstractmethod
     async def add(self, *, user_id: UUID, result: AnalysisResult) -> AnalysisResult:
-        """Insert a result built by the service.
-        ValueError if result.user_id != user_id or result.session_id is not
-        the document's session (programming errors).
-        NotFoundError if the document, or the row named in
-        served_from_analysis_id, is missing or not the user's.
-        ConflictError if the analysis_id is already used."""
+        """Insert a result built by the service."""
 
     @abstractmethod
     async def get(self, *, user_id: UUID, analysis_id: UUID) -> AnalysisResult:
-        """NotFoundError if missing or not the user's."""
+        """Return one of the user's results."""
 
     @abstractmethod
     async def list_for_document(self, *, user_id: UUID, document_id: UUID) -> list[AnalysisResult]:
-        """Newest first (ties: analysis_id). NotFoundError if the document
-        is missing or not the user's."""
+        """List a document's results, newest first."""
 
     @abstractmethod
     async def list_for_session(self, *, user_id: UUID, session_id: UUID) -> list[AnalysisResult]:
-        """Newest first (ties: analysis_id). NotFoundError if the session
-        is missing or not the user's."""
+        """List a session's results, newest first."""
 
     @abstractmethod
     async def delete(self, *, user_id: UUID, analysis_id: UUID) -> None:
-        """Delete one result. Rows copied from it keep their own payload and
-        sustainability; their served_from_analysis_id becomes None.
-        NotFoundError if missing or not the user's."""
+        """Delete one result; copies served from it lose their link to it."""
 
 
 class CredentialRepository(ABC):
-    """Ciphertext only: ApiKeyService encrypts and decrypts (fake cipher in
-    W3, Fernet in W4). One row per (user_id, provider)."""
+    """Access to encrypted API keys (ciphertext only)."""
 
     @abstractmethod
     async def upsert(
         self, *, user_id: UUID, provider: CloudProviderName, ciphertext: bytes
     ) -> UserApiKey:
-        """Insert, or replace the ciphertext of the existing row (created_at
-        kept, updated_at bumped). NotFoundError if the user does not exist."""
+        """Insert or replace the stored ciphertext for a provider."""
 
     @abstractmethod
     async def get(self, *, user_id: UUID, provider: CloudProviderName) -> UserApiKey | None:
-        """None if the user has no key for this provider."""
+        """Return the stored key for a provider, or None."""
 
     @abstractmethod
     async def list(self, *, user_id: UUID) -> list[UserApiKey]:
-        """The user's keys, ordered by provider name."""
+        """List the user's stored keys, ordered by provider."""
 
     @abstractmethod
     async def delete(self, *, user_id: UUID, provider: CloudProviderName) -> None:
-        """NotFoundError if the user has no key for this provider."""
+        """Delete the stored key for a provider."""
 
 
 # --- unit of work ---
 
 
 class UnitOfWork(ABC):
-    """One transaction: one AsyncSession in the SQLAlchemy implementation.
-
-        async with uow_factory() as uow:
-            session = await uow.sessions.add(user_id=uid, name="SMS pilot")
-            await uow.commit()
-
-    Leaving the block without commit() - normally or by an exception -
-    rolls back everything written since the last commit. After commit()
-    the unit of work can keep being used for a further transaction.
-    The repositories are only usable inside the ``async with`` block.
-    """
+    """One transaction over all repositories, used as an async context manager."""
 
     users: UserRepository
     sessions: SessionRepository
@@ -239,10 +190,11 @@ class UnitOfWork(ABC):
 
     @abstractmethod
     async def __aexit__(self, exc_type, exc, tb) -> None:
-        """Roll back anything not committed; never swallows the exception."""
+        """Roll back anything not committed without swallowing the exception."""
 
     @abstractmethod
-    async def commit(self) -> None: ...
+    async def commit(self) -> None:
+        """Commit everything written in this unit of work."""
 
     @abstractmethod
     async def rollback(self) -> None:

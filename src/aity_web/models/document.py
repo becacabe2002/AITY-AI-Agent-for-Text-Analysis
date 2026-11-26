@@ -1,3 +1,5 @@
+"""Domain model of an uploaded document, stored as text only."""
+
 from __future__ import annotations
 
 from pathlib import PurePosixPath
@@ -18,20 +20,7 @@ OriginalFilename = Annotated[
 
 
 class Document(BaseModel):
-    """
-    Uploaded file, stored as text only.
-    PDF and DOCX uploads keep only the extracted text; 
-    a TXT upload is stored as an exact copy.
-    The text file live at
-    {user_id}/{session_id}/{document_id}_{user_id}_{uploaded_at}.txt
-    which relative to AITY_UPLOAD_DIR. 
-
-    * text_path   - relative POSIX path under AITY_UPLOADS_DIR, inside the
-      owner's {user_id}/{session_id}/ folder, ending in .txt
-    * text_sha256 - SHA-256 of clean_text(text); feeds the content hash
-    * char_count  - length of the cleaned text (an empty text is rejected at
-      upload, so at least 1)
-    """
+    """An uploaded file kept as text: extracted text for PDF and DOCX, an exact copy for TXT."""
 
     model_config = DOMAIN_CONFIG
 
@@ -47,6 +36,7 @@ class Document(BaseModel):
 
     @model_validator(mode="after")
     def _check_text_path(self) -> Document:
+        """Check that text_path is a clean relative path inside the owner's session folder."""
         raw = self.text_path
         path = PurePosixPath(raw)
         if (

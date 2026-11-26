@@ -1,26 +1,4 @@
-"""
-LLMProviderRegistry (ADR-002 §7.4): provider name -> adapter, checked
-against the model catalogue.
-
-    registry = build_default_registry()              # once, at FastAPI startup
-    handle = registry.create("ollama", "qwen3.5:4b")  # per analysis
-    resp = await handle.complete(api_key=None, messages=..., system_prompt=...)
-
-* Registration is explicit and imports every adapter module at startup, so a
-  broken SDK install fails loud instead of at the first request.
-* One adapter instance per provider, shared by all requests: adapters hold no
-  user state (the API key arrives per call).
-* create() only accepts models in the catalogue (config/models.json).
-* A provider can be pinned to one model (ADR-009). build_default_registry()
-  pins AITY Built-in from $AITY_OLLAMA_MODEL (default: the catalogue's
-  default Ollama model), so the shared Ollama server never swaps models
-  between users. create() refuses any other model of a pinned provider
-  (ModelNotActiveError); catalog.model() still resolves it for display.
-* ApiKeyService asks requires_api_key(name); Ollama never needs a key.
-* ModelHandle.complete() is the one place provider exceptions are mapped:
-  SDK, Ollama and transport errors become ProviderError(kind=...) chained
-  to the original (ADR-002 §7.7); other exceptions pass through unchanged.
-"""
+"""Registry that maps provider names to adapters and checks models against the catalogue."""
 
 from __future__ import annotations
 
@@ -51,12 +29,7 @@ AdapterFactory = Callable[[], BaseProviderAdapter]
 
 @dataclass(frozen=True, slots=True)
 class ModelHandle:
-    """An adapter bound to one catalogue model; what create() returns.
-
-    complete() fills in `model` and the catalogue's default options;
-    kwargs given at call time override those defaults. Provider errors are
-    raised as ProviderError (see aity_web.llm.errors).
-    """
+    """An adapter bound to one catalogue model; what create() returns."""
 
     provider: str
     spec: ModelSpec
@@ -64,14 +37,17 @@ class ModelHandle:
 
     @property
     def model(self) -> str:
+        """The model id sent to the provider."""
         return self.spec.id
 
     @property
     def requires_api_key(self) -> bool:
+        """True if the provider needs a user API key."""
         return self.adapter.requires_api_key
 
     @property
     def prompt_profile(self) -> PromptProfile:
+        """The prompt profile of the model."""
         return self.spec.prompt_profile
 
     async def complete(
@@ -83,6 +59,7 @@ class ModelHandle:
         response_schema: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> ProviderResponse:
+        """Call the adapter with the catalogue defaults; provider errors become ProviderError."""
         try:
             return await self.adapter.complete(
                 api_key=api_key,
@@ -102,12 +79,10 @@ class ModelHandle:
 
 
 class LLMProviderRegistry:
-    def __init__(self, catalog: ModelCatalog, *, pinned: Mapping[str, str] | None = None) -> None:
-        """`pinned` maps provider -> the only model create() will run for it.
+    """Maps provider names to adapters, checked against the catalogue and any pinned models."""
 
-        Each pinned model must be in the catalogue; a typo fails here, at
-        startup, not at the first analysis.
-        """
+    def __init__(self, catalog: ModelCatalog, *, pinned: Mapping[str, str] | None = None) -> None:
+        """Create the registry; pinned maps a provider to the only model it may run."""
         self._catalog = catalog
         self._classes: dict[str, type[BaseProviderAdapter]] = {}
         self._factories: dict[str, AdapterFactory] = {} # functions to build the adapter
@@ -121,6 +96,7 @@ class LLMProviderRegistry:
 
     @property
     def catalog(self) -> ModelCatalog:
+        """The model catalogue."""
         return self._catalog
 
     # --- registration ---
@@ -128,11 +104,7 @@ class LLMProviderRegistry:
     def register(
         self, adapter_cls: type[BaseProviderAdapter], *, factory: AdapterFactory | None = None
     ) -> None:
-        """Register an adapter class under its `name`.
-
-        `factory` builds the instance when the constructor needs arguments
-        (e.g. the Ollama base URL); default is adapter_cls().
-        """
+        """Register an adapter class under its provider name."""
         name = getattr(adapter_cls, "name", None)
         if name not in PROVIDER_NAMES:
             raise ValueError(f"{adapter_cls.__name__}.name must be one of {PROVIDER_NAMES}, got {name!r}")
@@ -154,12 +126,14 @@ class LLMProviderRegistry:
         return tuple(n for n in PROVIDER_NAMES if n in self._classes and n in self._catalog.providers)
 
     def adapter_class(self, name: str) -> type[BaseProviderAdapter]:
+        """Return the adapter class of a registered provider."""
         try:
             return self._classes[name]
         except KeyError:
             raise UnknownProviderError(f"provider {name!r} is not registered") from None
 
     def requires_api_key(self, name: str) -> bool:
+        """True if the provider needs a user API key."""
         return self.adapter_class(name).requires_api_key
 
     def pinned_model(self, name: str) -> ModelSpec | None:
@@ -167,28 +141,21 @@ class LLMProviderRegistry:
         return self._pinned.get(name)
 
     def offered_models(self, name: str) -> tuple[ModelSpec, ...]:
-        """Models a user may pick for a new analysis: just the pinned one, or
-        the catalogue's selectable models for unpinned providers."""
+        """Models a user may pick for a new analysis."""
         pinned = self._pinned.get(name)
         if pinned is not None:
             return (pinned,)
         return self._catalog.provider(name).selectable_models
 
     def adapter(self, name: str) -> BaseProviderAdapter:
-        """The shared adapter instance for `name` (built on first use)."""
+        """Return the shared adapter instance for a provider, built on first use."""
         self.adapter_class(name)
         if name not in self._instances:
             self._instances[name] = self._factories[name]()
         return self._instances[name]
 
     def create(self, name: str, model: str) -> ModelHandle:
-        """Bind provider `name` to catalogue model `model`.
-
-        Raises UnknownProviderError / UnknownModelError, and
-        ModelNotActiveError for a catalogue model of a pinned provider that
-        is not the pinned one. Models with selectable=false still resolve,
-        so older sessions keep working.
-        """
+        """Bind a provider to a catalogue model; refuse unknown models and inactive pinned ones."""
         self.adapter_class(name)
         spec = self._catalog.model(name, model)
         pinned = self._pinned.get(name)
@@ -206,16 +173,7 @@ def build_default_registry(
     ollama_base_url: str | None = None,
     ollama_model: str | None = None,
 ) -> LLMProviderRegistry:
-    """The four production adapters, registered explicitly.
-
-    The Ollama base URL comes from the argument, then $AITY_OLLAMA_BASE_URL,
-    then the adapter default (http://ollama:11434).
-
-    The active AITY Built-in model comes from the argument, then
-    $AITY_OLLAMA_MODEL, then the catalogue's default Ollama model. It must
-    be in the catalogue (CatalogError otherwise). Whether the model is
-    actually pulled on the server is not checked here.
-    """
+    """Build the registry with the four production adapters and the active Built-in model."""
     from aity_web.llm.providers.anthropic import AnthropicProvider
     from aity_web.llm.providers.gemini import GeminiProvider
     from aity_web.llm.providers.ollama import DEFAULT_BASE_URL, OllamaProvider

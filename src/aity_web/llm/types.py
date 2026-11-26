@@ -1,10 +1,4 @@
-"""
-Types shared by the LLM layer and other modules of aity_web.
-
-Lives in the llm package (not models) so adapters never import from
-aity_web.models (ADR-002 §7.1); models.analysis_result imports TokenUsage
-from here.
-"""
+"""Types shared by the LLM layer and the rest of aity_web."""
 
 from __future__ import annotations
 
@@ -24,23 +18,19 @@ Role = Literal["user", "assistant"]
 
 
 class Message(TypedDict):
-    """One chat turn passed to BaseProviderAdapter.complete(messages=...).
-
-    Each adapter translates it to its SDK's shape.
-
-    No "system" role: the system prompt is a separate argument of complete(),
-    because Anthropic and Gemini take it outside the message list.
-    """
+    """One chat turn passed to an adapter; there is no system role."""
 
     role: Role
     content: str
 
 
 def user_message(content: str) -> Message:
+    """Build a user message."""
     return {"role": "user", "content": content}
 
 
 def assistant_message(content: str) -> Message:
+    """Build an assistant message."""
     return {"role": "assistant", "content": content}
 
 
@@ -50,22 +40,7 @@ _Count = int | None
 
 
 class TokenUsage(BaseModel):
-    """Token counts of one LLM call, as reported by the provider.
-
-    Every count is None when the provider does not report it; it is never
-    guessed, apart from total_tokens (see below).
-
-    * prompt_tokens  - input tokens, including the system prompt.
-    * output_tokens  - ALL generated tokens, thinking included. This is the
-      billed output count and what EcoLogits uses. OpenAI and Anthropic
-      report it this way already; the Gemini adapter adds
-      candidates_token_count + thoughts_token_count (same as the desktop
-      build_token_usage()).
-    * thought_tokens - the reasoning part of output_tokens; None when the
-      provider does not split it out (e.g. Ollama with think=False).
-    * total_tokens   - provider's total; filled with prompt + output when the
-      provider gives no total (Anthropic, some Ollama responses).
-    """
+    """Token counts of one LLM call as reported by the provider; None when not reported."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -77,6 +52,7 @@ class TokenUsage(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _fill_total(cls, data: object) -> object:
+        """Fill total_tokens from the prompt and output counts when the provider gives none."""
         if (
             isinstance(data, dict)
             and data.get("total_tokens") is None

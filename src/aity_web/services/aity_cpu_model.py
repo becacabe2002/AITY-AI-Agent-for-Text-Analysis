@@ -1,25 +1,4 @@
-"""
-AITY Built-in energy estimate from the ollama container's CPU time (ADR-003 §4).
-
-The estimation shim in the ollama container only MEASURES and returns raw
-readings; the formula and its constants live here, in the backend, so a
-formula or constant change ships with a backend deploy and never needs a new
-ollama image.
-
-    cpu_seconds = shim reading (cgroup v2 usage_usec delta)
-                  or duration_s x vcpus when cpu.stat was unreadable ("wall_clock",
-                  an upper bound)
-    it_joules   = cpu_seconds * W_PER_VCPU + duration_s * MODEL_RESIDENT_GB * W_PER_GB_RAM
-    energy_kwh  = it_joules * PUE / 3.6e6
-    co2e_kg     = energy_kwh * GRID_KG_PER_KWH
-
-Shim readings (the /internal/track/stop payload):
-    {"cpu_seconds": float | None, "duration_s": float, "vcpus": float,
-     "resident_bytes": int | None, "model": str | None}
-
-Constants: src/aity_web/config/sustainability_constants.toml, or the file
-named by $AITY_SUSTAINABILITY_CONSTANTS. Loaded once per process.
-"""
+"""Energy and CO2e estimate for AITY Built-in, based on the ollama container's CPU time."""
 
 from __future__ import annotations
 
@@ -89,6 +68,8 @@ def default_constants() -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class CpuModelEstimate:
+    """Result of the CPU-time model, with the inputs and constants behind it."""
+
     energy_kwh: float
     co2e_kg: float
     method: Method

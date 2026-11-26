@@ -1,3 +1,5 @@
+"""Domain model of a session, a named workspace for one user's documents."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -12,6 +14,7 @@ SESSION_DESCRIPTION_MAX = 2000
 
 
 def _blank_to_none(value: object) -> object:
+    """Turn a blank string into None."""
     if isinstance(value, str) and not value.strip():
         return None
     return value
@@ -28,13 +31,7 @@ SessionDescription = Annotated[
 
 
 class Session(BaseModel):
-    """
-    A named workspace for single user's documents, which hold no LLM configuration: provider and model are chosen per analysis and record on every AnalysisResult row.
-    * name        - 1-200 characters, stripped (editable)
-    * description - up to 2000 characters, stripped; blank becomes None (editable)
-    * updated_at  - bumped by the service on rename/describe and on new
-      documents or analyses (the session list is ordered by it)
-    """
+    """A named workspace for one user's documents; provider and model are chosen per analysis."""
 
     model_config = DOMAIN_CONFIG
 
@@ -47,6 +44,7 @@ class Session(BaseModel):
 
     @model_validator(mode="after")
     def _check_times(self) -> Session:
+        """Reject an updated_at earlier than created_at."""
         if self.updated_at < self.created_at:
             raise ValueError("updated_at is earlier than created_at")
         return self

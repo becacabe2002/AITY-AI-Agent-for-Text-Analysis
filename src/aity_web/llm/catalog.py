@@ -1,24 +1,4 @@
-"""
-Model catalogue: which models AITY offers per provider (config/models.json).
-
-* Hand-written; the model-list scraper is W3 work.
-* Cloud entries are maintained in the repo. AITY Built-in entries are
-  operator-controlled: they list the models the operator may run on the
-  ollama container. On Pouta the operator can point AITY_MODELS_JSON at
-  their own copy of the file instead of rebuilding the image.
-* AITY Built-in runs ONE model at a time (ADR-009): the registry pins it
-  from $AITY_OLLAMA_MODEL (default: the catalogue's `default` entry). The
-  other Built-in entries stay resolvable so past results can be displayed,
-  but cannot be run (ModelNotActiveError). Changing the model = restart.
-* A provider missing from the file is not offered at all.
-* Per-model `options` are default adapter kwargs (e.g. num_ctx,
-  structured_output_mode); kwargs passed at call time win.
-* `prompt_profile` picks the prompt override ("small" = shorter, more
-  directive prompts for small local models; see llm/prompts).
-* `selectable: false` hides a model from new sessions but keeps it
-  resolvable, so existing sessions that use it still work. (For AITY
-  Built-in, the pinned model decides what is offered, not `selectable`.)
-"""
+"""Model catalogue: which models AITY offers per provider, loaded from models.json."""
 
 from __future__ import annotations
 
@@ -56,15 +36,15 @@ class UnknownModelError(LookupError):
 
 
 class ModelNotActiveError(LookupError):
-    """The model is in the catalogue but the operator has not made it the
-    active model for its provider (AITY Built-in runs one model at a time).
-    Results produced earlier with it can still be viewed, not re-run."""
+    """The model is in the catalogue but is not the operator's active model."""
 
 
 # --- schema ---
 
 
 class ModelSpec(BaseModel):
+    """One model offered for a provider, with its tier, options and prompt profile."""
+
     model_config = _FROZEN
 
     id: str = Field(min_length=1, max_length=200)        # exact string sent to the provider
@@ -89,6 +69,7 @@ class ProviderCatalog(BaseModel):
 
     @model_validator(mode="after")
     def _check_models(self) -> ProviderCatalog:
+        """Require unique ids and exactly one selectable default model."""
         ids = [m.id for m in self.models]
         duplicates = sorted({i for i in ids if ids.count(i) > 1})
         if duplicates:
@@ -101,24 +82,30 @@ class ProviderCatalog(BaseModel):
         return self
 
     def get(self, model_id: str) -> ModelSpec | None:
+        """Return the model with this id, or None."""
         return next((m for m in self.models if m.id == model_id), None)
 
     @property
     def default_model(self) -> ModelSpec:
+        """The provider's default model."""
         return next(m for m in self.models if m.default)
 
     @property
     def selectable_models(self) -> tuple[ModelSpec, ...]:
+        """Models a user may pick for a new session."""
         return tuple(m for m in self.models if m.selectable)
 
 
 class ModelCatalog(BaseModel):
+    """All providers and models that AITY offers."""
+
     model_config = _FROZEN
 
     catalog_version: Literal[1]
     providers: dict[ProviderName, ProviderCatalog] = Field(min_length=1)
 
     def provider(self, name: str) -> ProviderCatalog:
+        """Return a provider's catalogue or raise UnknownProviderError."""
         try:
             return self.providers[name]  # type: ignore[index]
         except KeyError:
@@ -127,6 +114,7 @@ class ModelCatalog(BaseModel):
             ) from None
 
     def model(self, provider: str, model_id: str) -> ModelSpec:
+        """Return a model spec or raise UnknownModelError."""
         spec = self.provider(provider).get(model_id)
         if spec is None:
             raise UnknownModelError(f"model {model_id!r} is not in the {provider!r} catalogue")
@@ -137,12 +125,7 @@ class ModelCatalog(BaseModel):
 
 
 def load_catalog(path: str | os.PathLike[str] | None = None) -> ModelCatalog:
-    """Load and validate the catalogue.
-
-    Path order: the `path` argument, then $AITY_MODELS_JSON, then the copy
-    shipped in aity_web/config/models.json. Raises CatalogError so a broken
-    file fails at startup, not at the first analysis.
-    """
+    """Load and validate the catalogue from a path, the environment or the shipped file."""
     source = Path(path or os.environ.get(MODELS_JSON_ENV) or DEFAULT_MODELS_JSON)
     try:
         text = source.read_text(encoding="utf-8")

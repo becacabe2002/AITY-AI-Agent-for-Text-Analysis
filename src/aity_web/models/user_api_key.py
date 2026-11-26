@@ -1,3 +1,5 @@
+"""Domain model of a stored, encrypted BYOK API key."""
+
 from __future__ import annotations
 
 from typing import Literal, get_args
@@ -12,11 +14,7 @@ CLOUD_PROVIDER_NAMES: tuple[str, ...] = get_args(CloudProviderName)
 
 
 class UserApiKey(BaseModel):
-    """
-    Store one BYOK credential. This will never leaves the service layer.
-    Only the three cloud providers need a key. Ollama doesn't.
-    One row per (user_id, provider)
-    """
+    """One encrypted API key per user and cloud provider."""
     model_config = DOMAIN_CONFIG
 
     user_id: UUID
@@ -27,6 +25,7 @@ class UserApiKey(BaseModel):
 
     @model_validator(mode="after")
     def _check_times(self) -> UserApiKey:
+        """Reject an updated_at earlier than created_at."""
         if self.updated_at < self.created_at:
             raise ValueError("updated_at is earlier than created_at")
         return self

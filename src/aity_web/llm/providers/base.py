@@ -1,11 +1,4 @@
-"""
-Adapter contract for every LLM provider.
-
-* BaseProviderAdapter - ABC with one abstract awaitable, complete().
-* ProviderResponse    - what one complete() call returns. Short-lived, never
-  persisted, unaware of users, sessions, prompts or caching. The service layer
-  validates `structured` as LLMAnalysisPayload and builds the AnalysisResult.
-"""
+"""Adapter contract and response type shared by every LLM provider."""
 
 from __future__ import annotations
 
@@ -29,22 +22,7 @@ FINISH_REASONS: tuple[str, ...] = get_args(FinishReason)
 
 @dataclass(frozen=True, slots=True)
 class ProviderResponse:
-    """Result of one BaseProviderAdapter.complete() call.
-
-    * text          - raw model output exactly as returned: the JSON string on
-      structured calls (on every provider), plain prose
-      otherwise. Logged server-side on a parse failure; never persisted.
-    * structured    - the structured output as a dict; None when no
-      response_schema was requested or the output could not be parsed.
-      NOT validated here - the service layer does that.
-    * usage         - token counts from the SDK's native usage object.
-    * impacts       - EcoLogits `resp.impacts` (cloud adapters); always None on
-      Ollama, whose estimate comes from the shim via the orchestrator (§7.5).
-      Typed Any so this module never imports ecologits.
-    * finish_reason - normalised stop reason; "length" means the output hit
-      the token limit (service marks failed and retries once, ADR-008).
-    * raw           - untouched SDK response, for debugging only.
-    """
+    """Result of one adapter call: text, structured output, usage, impacts and finish reason."""
 
     text: str
     structured: dict[str, Any] | None = None
@@ -75,13 +53,7 @@ class ProviderResponse:
 
 
 class BaseProviderAdapter(ABC):
-    """One adapter per provider SDK (gemini, openai, anthropic, ollama).
-
-    Subclasses set the two class attributes and implement complete().
-    Adapters are stateless with respect to users: the API key arrives per
-    call (decrypted by ApiKeyService just before) and is never stored on
-    the instance.
-    """
+    """Base class of the provider adapters; stateless with respect to users."""
 
     #: Registry key; one of aity_web.llm.types.PROVIDER_NAMES for real adapters.
     name: ClassVar[str]
@@ -100,17 +72,7 @@ class BaseProviderAdapter(ABC):
         response_schema: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> ProviderResponse:
-        """Run one non-streaming completion and return a ProviderResponse.
-
-        * api_key         - plaintext BYOK key; None for providers with
-          requires_api_key=False. Use it for this call only.
-        * messages        - user/assistant turns; no "system" role.
-        * system_prompt   - passed in the provider's native slot.
-        * response_schema - LLMAnalysisPayload JSON Schema; the adapter translates it to the native mechanism. None = free-text call, structured stays None.
-        * kwargs          - provider sampling options. Common names adapters should have: `max_output_tokens`, `temperature`.
-
-        Arguments are keyword-only so api_key / model can never be swapped.
-        """
+        """Run one non-streaming completion and return a ProviderResponse."""
 
     # --- helpers for subclasses ---
 
@@ -122,14 +84,7 @@ class BaseProviderAdapter(ABC):
 
     @staticmethod
     def _extract_text(content: str | Sequence[Any] | None) -> str:
-        """Unwrap string-or-parts content into one string.
-
-        Accepts a plain string, or a list of parts that are dicts
-        ({"type": "text", "text": ...}) or SDK objects with a `.text`
-        attribute (Anthropic TextBlock, Gemini Part). Non-text parts
-        (tool_use, images) and Gemini thought parts (thought=True) are
-        skipped. Parts are concatenated without a separator.
-        """
+        """Join the text parts of string-or-parts content, skipping non-text and thought parts."""
         if content is None:
             return ""
         if isinstance(content, str):
@@ -153,6 +108,7 @@ class BaseProviderAdapter(ABC):
 
     @staticmethod
     def _parse_structured(text: str) -> dict[str, Any] | None:
+        """Parse text as a JSON object, or return None."""
         try:
             value = json.loads(text)
         except ValueError:

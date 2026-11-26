@@ -1,27 +1,4 @@
-"""
-ProviderError: one error type for every LLM provider (ADR-002 §7.7).
-
-Adapters let SDK exceptions propagate unchanged. ModelHandle.complete()
-(llm/registry.py) is the one place every provider call passes through; it
-passes each exception to to_provider_error() and raises the ProviderError
-it returns, chained to the original (`raise ... from exc`), so the SDK
-details stay in the server log.
-
-    kind           meaning                                     retryable
-    auth           key invalid, revoked or lacking permission  no
-    rate_limit     429; quota_exhausted=True for no credit     yes / no
-                   (402, OpenAI insufficient_quota, Anthropic
-                   billing / low credit balance)
-    unavailable    5xx, overloaded, timeout, connection error  yes
-    bad_request    any other 4xx (bad model id, too large...)  no
-
-Only provider and transport errors are mapped. Anything else (TypeError for
-an unsupported option, ValueError for a missing key) is a programming or
-config error and is re-raised unchanged.
-
-ProviderError's str() and user_message never contain SDK text: provider
-messages can echo request details, so they stay on the chained exception.
-"""
+"""ProviderError, the single error type for every LLM provider, and the mapping to it."""
 
 from __future__ import annotations
 
@@ -53,18 +30,7 @@ _MESSAGES: dict[str, str] = {
 
 
 class ProviderError(RuntimeError):
-    """A provider call failed; `kind` says what the user can do about it.
-
-    * kind            - see the module table above
-    * provider        - registry name (gemini, openai, anthropic, ollama)
-    * status_code     - HTTP status, None for timeouts and connection errors
-    * retryable       - True for rate_limit (unless quota_exhausted) and
-      unavailable; the W5 job queue can use it for a delayed retry
-    * retry_after_s   - the provider's Retry-After header, when sent
-    * quota_exhausted - rate_limit caused by no credit/quota (OpenAI
-      insufficient_quota, HTTP 402): waiting does not help
-    * timed_out       - unavailable because the call timed out
-    """
+    """A provider call failed; kind says what the user can do about it."""
 
     def __init__(
         self,
@@ -76,6 +42,7 @@ class ProviderError(RuntimeError):
         quota_exhausted: bool = False,
         timed_out: bool = False,
     ) -> None:
+        """Create the error; kind must be one of PROVIDER_ERROR_KINDS."""
         if kind not in PROVIDER_ERROR_KINDS:
             raise ValueError(f"kind must be one of {PROVIDER_ERROR_KINDS}, got {kind!r}")
         self.kind: ProviderErrorKind = kind
@@ -90,6 +57,7 @@ class ProviderError(RuntimeError):
 
     @property
     def retryable(self) -> bool:
+        """True if trying again later may succeed."""
         if self.kind == "rate_limit":
             return not self.quota_exhausted
         return self.kind == "unavailable"
@@ -111,7 +79,7 @@ class ProviderError(RuntimeError):
 
 
 def kind_for_status(status_code: int) -> ProviderErrorKind:
-    """The one status-code rule shared by all four providers."""
+    """Map an HTTP status code to an error kind."""
     if status_code in (401, 403):
         return "auth"
     if status_code in (402, 429):
@@ -168,6 +136,7 @@ def _from_status(
     headers: Mapping[str, str] | None = None,
     quota_exhausted: bool = False,
 ) -> ProviderError:
+    """Build a ProviderError from an HTTP status and response headers."""
     quota = quota_exhausted or status_code == 402
     kind: ProviderErrorKind = "rate_limit" if quota else kind_for_status(status_code)
     return ProviderError(
@@ -202,11 +171,13 @@ def _error_body(exc: Any) -> Mapping[str, Any]:
 
 def _openai_insufficient_quota(exc: Any) -> bool:
     # OpenAI sends 429 with code "insufficient_quota" when the account has no credit
+    """True if OpenAI reports that the account has no credit."""
     return getattr(exc, "code", None) == "insufficient_quota"
 
 
 def _anthropic_billing(exc: Any) -> bool:
     # Anthropic: type "billing_error", or a 400 saying the credit balance is too low
+    """True if Anthropic reports a billing or low-credit problem."""
     if not isinstance(exc, anthropic.APIStatusError):
         return False
     error = _error_body(exc)
@@ -218,6 +189,7 @@ def _anthropic_billing(exc: Any) -> bool:
 
 def _gemini_invalid_key(exc: genai_errors.APIError) -> bool:
     # error.details[] holds an ErrorInfo with reason "API_KEY_INVALID"
+    """True if Gemini reports an invalid API key."""
     return "API_KEY_INVALID" in str(exc.details) or "API key not valid" in (exc.message or "")
 
 

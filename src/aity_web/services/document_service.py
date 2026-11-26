@@ -1,18 +1,4 @@
-"""Documents: upload, list, read, delete - ADR-004 §7.5, §7.7.
-
-Upload order:
-  1. extract the text in memory (PDF/DOCX never touch the disk);
-     DocumentRejectedError for anything that cannot become a document
-  2. check the session belongs to the user (NotFoundError) - before any write
-  3. write the .txt via '.part' + rename
-  4. insert the row, bump the session's updated_at, commit
-  If step 4 fails the text file is removed again.
-
-Delete: delete the row (its analyses cascade), commit, then remove the text
-file; a failed file delete is logged, never raised.
-
-Duplicate content uploaded twice becomes two documents (no deduplication in v1).
-"""
+"""Service for uploading, listing, reading and deleting documents."""
 
 from __future__ import annotations
 
@@ -33,9 +19,7 @@ log = logging.getLogger(__name__)
 
 
 def clean_filename(filename: str) -> str:
-    """The name kept as metadata: last path component (browsers may send
-    'C:\\fakepath\\x.pdf'), control characters dropped, stripped, at most
-    255 characters with the extension kept. Never used to build a path."""
+    """Return a safe display name for an uploaded file; it is never used to build a path."""
     name = PureWindowsPath(filename or "").name  # splits on both / and \
     name = "".join(ch for ch in name if unicodedata.category(ch)[0] != "C").strip()
     if not name:
@@ -47,6 +31,8 @@ def clean_filename(filename: str) -> str:
 
 
 class DocumentService:
+    """Document operations: upload, list, read and delete."""
+
     def __init__(
         self,
         uow_factory: UowFactory,
@@ -55,6 +41,7 @@ class DocumentService:
         clock: Clock = utc_now,
         new_id: Callable[[], UUID] = uuid4,
     ) -> None:
+        """Create the service with its unit-of-work factory, storage, clock and id source."""
         self._uow_factory = uow_factory
         self._storage = storage
         self._clock = clock
@@ -63,10 +50,7 @@ class DocumentService:
     async def upload(
         self, *, user_id: UUID, session_id: UUID, filename: str, data: bytes
     ) -> Document:
-        """Store an uploaded PDF, DOCX or TXT in a session.
-
-        DocumentRejectedError (user-safe message) if the file cannot be used;
-        NotFoundError if the session is missing or not the user's."""
+        """Store an uploaded PDF, DOCX or TXT in a session and return the new document."""
         original = clean_filename(filename)
         extracted = await asyncio.to_thread(extract, original, data)
 
@@ -101,17 +85,17 @@ class DocumentService:
         return document
 
     async def list(self, *, user_id: UUID, session_id: UUID) -> list[Document]:
-        """The session's documents, oldest upload first.
-        NotFoundError if the session is missing or not the user's."""
+        """List a session's documents, oldest upload first."""
         async with self._uow_factory() as uow:
             return await uow.documents.list_for_session(user_id=user_id, session_id=session_id)
 
     async def get(self, *, user_id: UUID, document_id: UUID) -> Document:
+        """Return one of the user's documents."""
         async with self._uow_factory() as uow:
             return await uow.documents.get(user_id=user_id, document_id=document_id)
 
     async def delete(self, *, user_id: UUID, document_id: UUID) -> None:
-        """Delete the document and its analyses, then its text file."""
+        """Delete the document, its analyses and its text file."""
         async with self._uow_factory() as uow:
             document = await uow.documents.delete(user_id=user_id, document_id=document_id)
             await uow.commit()

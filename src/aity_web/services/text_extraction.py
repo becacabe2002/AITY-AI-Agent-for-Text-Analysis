@@ -1,20 +1,4 @@
-"""Turn an uploaded PDF, DOCX or TXT into text - ADR-004 §7.5.
-
-* PDF  - pypdf, the text of each page, pages joined by a blank line.
-* DOCX - python-docx, paragraphs and table cells in document order
-         (a table row becomes one line, its cells separated by a tab).
-* TXT  - decoded as UTF-8 (a BOM is accepted); the stored file is an exact
-         copy of the uploaded bytes.
-
-extract() works on bytes held in memory: the original PDF or DOCX is never
-written to disk. It is synchronous and CPU-bound (a large PDF can take a
-while), so async callers run it in a worker thread (asyncio.to_thread).
-
-Every rejection is a DocumentRejectedError subclass whose message is safe to
-show to the user (no file content, no library internals). The W5 upload
-route maps them to HTTP 415 (unsupported type) / 422 (the rest).
-The upload size limit is set with the route in W5.
-"""
+"""Turn an uploaded PDF, DOCX or TXT into cleaned text."""
 
 from __future__ import annotations
 
@@ -68,14 +52,7 @@ class EmptyDocumentError(DocumentRejectedError):
 
 @dataclass(frozen=True, repr=False)
 class ExtractedText:
-    """
-    * source_type - pdf / docx / txt
-    * stored_bytes - what goes into the .txt file: the extracted text in
-      UTF-8 for PDF/DOCX, the uploaded bytes unchanged for TXT
-    * cleaned     - clean_text() of the text (what a model will see)
-    * text_sha256 - SHA-256 of `cleaned`
-    * char_count  - len(cleaned), at least 1
-    """
+    """Extracted text of an upload: the bytes to store, the cleaned text and its hash."""
 
     source_type: SourceType
     stored_bytes: bytes
@@ -84,6 +61,7 @@ class ExtractedText:
 
     @property
     def char_count(self) -> int:
+        """Length of the cleaned text."""
         return len(self.cleaned)
 
     def __repr__(self) -> str:  # never print document text into logs
@@ -94,8 +72,7 @@ class ExtractedText:
 
 
 def source_type_for(filename: str) -> SourceType:
-    """pdf / docx / txt from the file extension (case-insensitive).
-    UnsupportedFileTypeError for anything else."""
+    """Return pdf, docx or txt from the file extension; raise UnsupportedFileTypeError otherwise."""
     suffix = PureWindowsPath(filename).suffix.lower().lstrip(".")  # handles / and \
     if suffix not in SOURCE_TYPES:
         raise UnsupportedFileTypeError(
@@ -105,7 +82,7 @@ def source_type_for(filename: str) -> SourceType:
 
 
 def extract(filename: str, data: bytes) -> ExtractedText:
-    """Extract the text of an upload. See the module docstring for the rules."""
+    """Extract and clean the text of an upload."""
     source_type = source_type_for(filename)
     if source_type == "pdf":
         raw = _pdf_text(data)
@@ -145,6 +122,7 @@ def decode_txt(data: bytes) -> str:
 
 
 def _pdf_text(data: bytes) -> str:
+    """Extract the text of a PDF, rejecting encrypted or unreadable files."""
     from pypdf import PdfReader
     from pypdf.errors import PyPdfError
 
@@ -176,6 +154,7 @@ def _pdf_text(data: bytes) -> str:
 
 
 def _docx_text(data: bytes) -> str:
+    """Extract the paragraphs and table cells of a DOCX in document order."""
     import zipfile
 
     import docx
@@ -209,6 +188,7 @@ def _table_lines(table):
     # Merged cells are returned once per grid position they cover (across
     # columns and rows); each underlying cell is emitted only the first time.
     # References are kept, so the identity check is reliable.
+    """Yield one tab-separated line per table row, emitting merged cells only once."""
     seen: list = []
     for row in table.rows:
         cells = []

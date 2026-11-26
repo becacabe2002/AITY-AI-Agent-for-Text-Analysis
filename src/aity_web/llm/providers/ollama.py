@@ -1,9 +1,4 @@
-"""
-Ollama adapter - "AITY Built-in"
-
-No API key, no EcoLogits: `impacts` is always None; the energy estimate comes
-from the shim in the ollama container.
-"""
+"""Ollama adapter (AITY Built-in): no API key and no EcoLogits impacts."""
 
 from __future__ import annotations
 
@@ -42,12 +37,15 @@ class OllamaError(RuntimeError):
     """Ollama answered with an HTTP error; carries its {"error": ...} text."""
 
     def __init__(self, status_code: int, message: str) -> None:
+        """Create the error from the HTTP status and Ollama's error text."""
         super().__init__(f"ollama HTTP {status_code}: {message}")
         self.status_code = status_code
         self.message = message
 
 
 class OllamaProvider(BaseProviderAdapter):
+    """Adapter for the shared Ollama server."""
+
     name = "ollama"
     requires_api_key = False
 
@@ -64,6 +62,7 @@ class OllamaProvider(BaseProviderAdapter):
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         # Not user state: one shared server address. `transport` is for tests.
+        """Create the adapter for one shared Ollama server; transport is for tests."""
         self.base_url = base_url.rstrip("/")
         self._transport = transport
 
@@ -77,6 +76,7 @@ class OllamaProvider(BaseProviderAdapter):
         response_schema: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> ProviderResponse:
+        """Call Ollama's chat endpoint and return a ProviderResponse."""
         request = self._build_request(model, messages, system_prompt, response_schema, kwargs)
 
         async with self._make_client() as client:
@@ -89,6 +89,7 @@ class OllamaProvider(BaseProviderAdapter):
     # --- request ---
 
     def _make_client(self) -> httpx.AsyncClient:
+        """Create the HTTP client for one call."""
         return httpx.AsyncClient(
             base_url=self.base_url, timeout=self.timeout, transport=self._transport
         )
@@ -101,11 +102,7 @@ class OllamaProvider(BaseProviderAdapter):
         response_schema: Mapping[str, Any] | None,
         kwargs: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """
-        Build request with two modes:
-        * "grammar" (default) - the schema goes into `format`. It may be underperform with small models
-        * "prompt" (fallback) - the schema is appended to the system prompt and model is trusted to follow it.
-        """
+        """Build the chat request, enforcing the schema by grammar or by prompt."""
         
         unknown = set(kwargs) - _ADAPTER_KWARGS - set(_OPTIONS)
         if unknown:
@@ -149,11 +146,7 @@ class OllamaProvider(BaseProviderAdapter):
         return request
 
     def _think(self, model: str, requested: bool | None) -> bool | None:
-        """For current Qwen3 models: always False (hard requirement, not a knob).
-
-        Other models: whatever the caller asked for; None leaves the field out,
-        so models without thinking support are not sent a `think` they reject.
-        """
+        """Decide the think flag: forced off for Qwen3 models, otherwise as requested."""
         if model.lower().startswith(_NO_THINK_PREFIXES):
             if requested:
                 raise ValueError(f"{self.name}: think=True is not allowed for {model!r}")
@@ -163,6 +156,7 @@ class OllamaProvider(BaseProviderAdapter):
     # --- response ---
 
     def _to_response(self, body: Mapping[str, Any], *, structured_call: bool) -> ProviderResponse:
+        """Convert Ollama's reply to a ProviderResponse."""
         message = body.get("message") or {}
         text = self._extract_text(message.get("content"))   # `thinking` is never used
 
@@ -180,6 +174,7 @@ class OllamaProvider(BaseProviderAdapter):
 
     @staticmethod
     def _error_text(resp: httpx.Response) -> str:
+        """Extract the error text of a failed Ollama reply."""
         try:
             error = resp.json().get("error")
         except ValueError:

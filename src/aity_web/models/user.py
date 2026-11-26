@@ -1,3 +1,5 @@
+"""Domain model of a user account."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -16,9 +18,7 @@ Username = Annotated[
 
 
 class User(BaseModel):
-    """
-    Model for user account
-    * Never returned by the API as-is: password_hash stays in the service layer."""
+    """A user account; the password hash never leaves the service layer."""
 
     model_config = DOMAIN_CONFIG
 

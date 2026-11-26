@@ -1,25 +1,4 @@
-"""Table definitions (SQLAlchemy Core) for the W3 schema - ADR-004 §4.
-
-This module is the source of truth for the schema, and where every schema
-change starts. The repositories build their queries from it, and Alembic
-autogenerate drafts the migrations by comparing ``metadata`` with the
-database; each reviewed migration must produce exactly these tables.
-tests/db/test_migrations.py compares the migrated database with
-``metadata`` and fails on any difference.
-
-Autogenerate does not read the Pydantic models in aity_web.models: a new,
-renamed or removed top-level field there must be mirrored here by hand
-(test_db_layer.py checks the analysis_results column names). Changes inside
-the JSONB blobs (payload, token_usage, sustainability) need no table change.
-
-Ownership is enforced twice: every repository query filters by user_id, and
-composite foreign keys make it impossible to store a document in another
-user's session, or an analysis whose (document, session, user) does not
-match its document. The repositories raise ValueError / NotFoundError
-before the database would refuse.
-
-W4 adds user_api_keys and prompt_variants; W8 adds comparisons and syntheses.
-"""
+"""Table definitions (SQLAlchemy Core); the source of truth for the database schema."""
 
 from __future__ import annotations
 
@@ -53,10 +32,12 @@ metadata = MetaData()
 
 
 def _tz() -> DateTime:
+    """Return the timezone-aware timestamp column type."""
     return DateTime(timezone=True)
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
+    """Build a SQL 'column IN (...)' check expression."""
     return f"{column} IN ({', '.join(repr(v) for v in values)})"
 
 

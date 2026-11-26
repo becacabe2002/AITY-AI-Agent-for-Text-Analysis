@@ -1,1 +1,1 @@
-"""Business logic: analysis orchestration, sustainability, (W3) sessions and repositories."""
+"""Business logic: documents, sessions, analyses, API keys, caching and sustainability."""

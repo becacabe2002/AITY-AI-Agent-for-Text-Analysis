@@ -1,17 +1,4 @@
-"""SqlAlchemyUnitOfWork: one AsyncSession = one unit of work (ADR-004 §7.3).
-
-    uow_factory = make_uow_factory(make_session_factory(make_engine()))
-    async with uow_factory() as uow:
-        s = await uow.sessions.add(user_id=uid, name="SMS pilot")
-        await uow.commit()
-
-The session is opened on enter and closed on exit; anything not committed is
-rolled back. After commit() the same unit of work starts a new transaction
-on its next statement (SQLAlchemy autobegin).
-
-Timestamps the repositories set (users, sessions) come from ``clock``, not
-from the database, so tests can control them and the in-memory fakes match.
-"""
+"""SQLAlchemy unit of work: one AsyncSession is one transaction."""
 
 from __future__ import annotations
 
@@ -33,35 +20,43 @@ Clock = Callable[[], datetime]
 
 
 def utc_now() -> datetime:
+    """Return the current time in UTC."""
     return datetime.now(timezone.utc)
 
 
 class _CredentialsNotYetAvailable(CredentialRepository):
-    """The user_api_keys table and its repository arrive in W4 (ADR-005).
-    Until then every call fails loudly instead of silently storing nothing."""
+    """Placeholder credential repository that fails loudly until the key table exists."""
 
     def _fail(self):
+        """Raise NotImplementedError for every credential operation."""
         raise NotImplementedError(
             "CredentialRepository has no PostgreSQL implementation until W4 (ADR-005)"
         )
 
     async def upsert(self, *, user_id, provider: CloudProviderName, ciphertext: bytes) -> UserApiKey:
+        """Not available yet; always fails."""
         self._fail()
 
     async def get(self, *, user_id, provider: CloudProviderName) -> UserApiKey | None:
+        """Not available yet; always fails."""
         self._fail()
 
     async def list(self, *, user_id) -> list[UserApiKey]:
+        """Not available yet; always fails."""
         self._fail()
 
     async def delete(self, *, user_id, provider: CloudProviderName) -> None:
+        """Not available yet; always fails."""
         self._fail()
 
 
 class SqlAlchemyUnitOfWork(UnitOfWork):
+    """Unit of work over one AsyncSession: explicit commit, rollback on exit."""
+
     def __init__(
         self, session_factory: async_sessionmaker[AsyncSession], *, clock: Clock = utc_now
     ) -> None:
+        """Create the unit of work and its repositories; the session opens on entering the block."""
         self._session_factory = session_factory
         self.clock = clock
         self._session: AsyncSession | None = None
@@ -72,6 +67,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.credentials = _CredentialsNotYetAvailable()
 
     def _active_session(self) -> AsyncSession:
+        """Return the open session, or raise if used outside the async with block."""
         if self._session is None:
             raise RuntimeError("repositories are only usable inside 'async with uow:'")
         return self._session
@@ -92,18 +88,21 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             await session.close()
 
     async def commit(self) -> None:
+        """Commit the current transaction."""
         await self._active_session().commit()
 
     async def rollback(self) -> None:
+        """Roll back the current transaction."""
         await self._active_session().rollback()
 
 
 def make_uow_factory(
     session_factory: async_sessionmaker[AsyncSession], *, clock: Clock = utc_now
 ) -> Callable[[], SqlAlchemyUnitOfWork]:
-    """What services receive: a zero-argument callable returning a new unit of work."""
+    """Return the zero-argument factory that services use to get a new unit of work."""
 
     def factory() -> SqlAlchemyUnitOfWork:
+        """Build one unit of work."""
         return SqlAlchemyUnitOfWork(session_factory, clock=clock)
 
     return factory

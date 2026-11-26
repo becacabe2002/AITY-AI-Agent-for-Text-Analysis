@@ -1,11 +1,4 @@
-"""
-Raw readings of the shim (ADR-003 §4, revised Nov 25th, 2026) - no web framework,
-so it is unit-tested on its own (tests/ollama_shim/).
-
-The shim only MEASURES. The formula and its constants live in the backend
-(aity_web.services.aity_cpu_model), so changing them never needs a new
-ollama image.
-"""
+"""Raw container readings for the shim, free of any web framework so they test on their own."""
 from __future__ import annotations
 
 import os

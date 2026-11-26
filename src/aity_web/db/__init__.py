@@ -1,13 +1,4 @@
-"""Database layer (ADR-004): async engine and session factory, table
-definitions, the SQLAlchemy unit of work and the Alembic migrations.
-
-    engine = make_engine()                    # AITY_DATABASE_URL
-    uow_factory = make_uow_factory(make_session_factory(engine))
-    async with uow_factory() as uow: ...
-
-Services never import this package directly: they receive a unit-of-work
-factory (repositories.base.UnitOfWork), so tests can pass the in-memory one.
-"""
+"""Database layer: async engine, table definitions, SQLAlchemy unit of work and migrations."""
 
 from aity_web.db.engine import (
     DATABASE_URL_ENV,

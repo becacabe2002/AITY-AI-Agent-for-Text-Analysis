@@ -1,4 +1,4 @@
-"""Shared plumbing for the SQLAlchemy repositories."""
+"""Shared helpers for the SQLAlchemy repositories."""
 
 from __future__ import annotations
 
@@ -23,31 +23,33 @@ _FOREIGN_KEY_VIOLATION = "23503"
 
 
 def sqlstate(exc: IntegrityError) -> str | None:
+    """Return the PostgreSQL SQLSTATE code of an integrity error, if any."""
     orig = exc.orig
     return getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
 
 
 class SqlRepo:
-    """Base class: the unit of work owns the AsyncSession and the clock."""
+    """Base class of the SQLAlchemy repositories; the unit of work owns the session and clock."""
 
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+        """Bind the repository to its unit of work."""
         self._uow = uow
 
     @property
     def _db(self) -> AsyncSession:
+        """The unit of work's active session."""
         return self._uow._active_session()
 
     def _now(self) -> datetime:
+        """Return the current time from the unit of work's clock."""
         return self._uow.clock()
 
     async def _execute(self, statement: Executable) -> Any:
+        """Run a statement on the active session."""
         return await self._db.execute(statement)
 
     async def _insert(self, statement: Insert, conflict: str) -> Any:
-        """Run an INSERT inside a SAVEPOINT, so a refused row does not abort
-        the whole transaction. Unique and foreign-key violations become
-        ConflictError(conflict); any other integrity error (a CHECK the
-        domain model should have caught) is re-raised unchanged."""
+        """Run an INSERT in a savepoint; unique and foreign-key violations become ConflictError."""
         try:
             async with self._db.begin_nested():
                 return await self._db.execute(statement)

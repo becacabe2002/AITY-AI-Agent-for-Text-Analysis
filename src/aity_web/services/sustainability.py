@@ -1,17 +1,4 @@
-"""
-Sustainability seam of the service layer (ADR-003).
-
-* init_ecologits()  - the ONLY place in aity_web that calls EcoLogits.init().
-  Patches the three cloud SDKs once per process, so every cloud response
-  carries `resp.impacts`. Called at process startup (FastAPI startup hook
-  from W5; the smoke script and the W2 stub service until then).
-* wall_clock()      - thin timer for SustainabilityMetrics.latency_seconds
-  (replaces the desktop app's SustainabilityRunTracker).
-* SustainabilityCollector.collect() - maps EcoLogits impacts (cloud), or the
-  estimation shim's raw CPU-time readings run through aity_cpu_model.estimate()
-  (AITY Built-in), into one SustainabilityMetrics.
-  Never raises: any failure becomes estimate_status="unavailable".
-"""
+"""Sustainability estimation for each provider call: EcoLogits setup, timer and collector."""
 
 from __future__ import annotations
 
@@ -43,14 +30,7 @@ _ecologits_ready = False
 
 
 def init_ecologits() -> bool:
-    """Patch the cloud SDKs with EcoLogits, once per process.
-
-    Safe to call more than once: later calls do nothing and return False.
-    The electricity mix zone is left at EcoLogits' default (world average),
-    because inference runs in the providers' data centres, not on Pouta.
-
-    Returns True if this call did the initialisation.
-    """
+    """Patch the cloud SDKs with EcoLogits once per process; return True if this call did it."""
     global _ecologits_ready
     with _ecologits_lock:
         if _ecologits_ready:
@@ -73,21 +53,14 @@ def ecologits_ready() -> bool:
 
 @dataclass
 class Stopwatch:
-    """Filled in by wall_clock() when the block exits."""
+    """Holds the elapsed seconds set by wall_clock()."""
 
     seconds: float | None = None
 
 
 @contextmanager
 def wall_clock() -> Generator[Stopwatch]:
-    """Time a block with a monotonic clock; works around `await` calls too.
-
-        with wall_clock() as t:
-            resp = await adapter.complete(...)
-        latency = t.seconds
-
-    `seconds` is set even if the block raises.
-    """
+    """Time a block with a monotonic clock; seconds is set even if the block raises."""
     watch = Stopwatch()
     start = time.perf_counter()
     try:
@@ -109,11 +82,7 @@ INFORMATIONAL_ECOLOGITS_WARNINGS: frozenset[str] = frozenset(
 
 
 def _number(value: Any) -> float | None:
-    """EcoLogits value -> one number.
-
-    EcoLogits returns a plain number for open models and a RangeValue
-    (min/max) for proprietary ones; only the midpoint of a range is stored.
-    """
+    """Convert an EcoLogits value (a number or a range) to one number."""
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -125,7 +94,7 @@ def _number(value: Any) -> float | None:
 
 
 def _message(item: Any) -> str:
-    """EcoLogits WarningMessage / ErrorMessage -> 'code: message' (no docs URL)."""
+    """Format an EcoLogits warning or error as 'code: message'."""
     code, text = getattr(item, "code", None), getattr(item, "message", None)
     if code and text:
         return f"{code}: {text}"
@@ -133,7 +102,7 @@ def _message(item: Any) -> str:
 
 
 class SustainabilityCollector:
-    """Maps one provider call to SustainabilityMetrics (ADR-003 §7.2)."""
+    """Maps one provider call to SustainabilityMetrics."""
 
     @staticmethod
     def collect(
@@ -142,15 +111,7 @@ class SustainabilityCollector:
         latency_seconds: float,
         ollama_track_result: Mapping[str, Any] | None = None,
     ) -> SustainabilityMetrics:
-        """Build the row's sustainability block. Never raises.
-
-        * provider            - registry name ("gemini", "openai", "anthropic", "ollama")
-        * provider_response   - what adapter.complete() returned
-        * latency_seconds     - wall clock of adapter.complete() only
-        * ollama_track_result - shim readings for provider="ollama" (the
-          /internal/track/stop payload); None if the shim was unreachable.
-          Ignored for cloud providers.
-        """
+        """Build the sustainability block for one provider call; never raises."""
         latency = max(0.0, float(latency_seconds))
         try:
             if provider in ECOLOGITS_ROWS:
@@ -169,6 +130,7 @@ class SustainabilityCollector:
 
 
 def _from_ecologits(resp: ProviderResponse | None, latency: float) -> SustainabilityMetrics:
+    """Build metrics from the EcoLogits impacts of a cloud response."""
     if resp is None:
         return SustainabilityMetrics.unavailable(latency, ["ecologits: no provider response (the call failed)"])
     impacts = getattr(resp, "impacts", None)

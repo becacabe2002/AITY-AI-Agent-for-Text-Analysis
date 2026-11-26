@@ -1,6 +1,4 @@
-"""
-LLMAnalysisPayload is what the LLM generates, which then wrapped in AnalysisResult.
-"""
+"""The structured output the LLM generates, its provider-facing JSON schema and its checks."""
 
 from __future__ import annotations
 
@@ -24,12 +22,16 @@ Keyword = Annotated[
 ]
 
 class Topic(BaseModel):
+    """One higher-level topic: a short label and a one-sentence description."""
+
     model_config = _STRICT
 
     label: str = Field(description="A 2-6 word topic name in Title Case.")
     description: str = Field(description="One sentence explaining why this topic is in the document.")
 
 class LLMAnalysisPayload(BaseModel):
+    """What the LLM generates for a document: summary, keywords and topics."""
+
     model_config = _STRICT
 
     summary: str = Field(description="An under-200-words summary of the document in the same language as the source.")
@@ -59,36 +61,26 @@ def _inline(node: Any, defs: dict[str, Any]) -> Any:
     return node
 
 def build_provider_schema() -> dict[str, Any]:
+    """Build the self-contained JSON schema that is sent to providers."""
     raw = LLMAnalysisPayload.model_json_schema()
     body = _inline(raw, raw.get("$defs", {}))
     return {"$schema": _JSON_SCHEMA_DIALECT, "title": "LLMAnalysisPayload", **body}
 
 @lru_cache(maxsize=1)
 def _schema_text() -> str:
+    """Return the provider schema as cached JSON text."""
     return json.dumps(build_provider_schema(), ensure_ascii=False)
 
 
 def llm_analysis_payload_schema() -> dict[str, Any]:
-    """Return a fresh copy of the provider-facing schema.
-
-    A new dict each call, so an adapter that wraps or edits it (e.g. Anthropic's
-    tool input_schema) cannot change the schema for other callers.
-    """
+    """Return a fresh copy of the provider-facing schema."""
     return json.loads(_schema_text())
 
 
 # --- Normalize and check semantic ---
 
 def normalize_payload(payload: LLMAnalysisPayload) -> LLMAnalysisPayload:
-    """Clean a validated payload before it is persisted.
-
-    * summary, topic labels and descriptions: surrounding whitespace stripped;
-    * keywords: stripped, lowercased, empty ones dropped, duplicates removed
-      (only keep first occurrence).
-
-    Topics are not deduplicated or reordered: their labels are free text and
-    merging them would be a guess.
-    """
+    """Strip whitespace and deduplicate keywords of a validated payload before it is stored."""
     keywords: list[str] = []
     seen: set[str] = set()
     for kw in payload.keywords:
@@ -107,12 +99,7 @@ def normalize_payload(payload: LLMAnalysisPayload) -> LLMAnalysisPayload:
     )
 
 def payload_issues(payload: LLMAnalysisPayload) -> list[str]:
-    """
-    Issues of a normalized payload.
-    * No issues -> ok status
-    * Have issues -> partial status
-    The issues here never triggers a retry.
-    """
+    """List semantic problems of a normalised payload (none means ok, any means partial)."""
     issues: list[str] = []
     if not payload.summary.strip():
         issues.append("summary is empty")

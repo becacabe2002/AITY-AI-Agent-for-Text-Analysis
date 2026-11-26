@@ -1,11 +1,4 @@
-"""Run the Alembic migrations from Python (tests, the W9 deploy, `make bootstrap`).
-
-    python -m aity_web.db.migrate            # upgrade head, URL from AITY_DATABASE_URL
-    python -m aity_web.db.migrate base       # downgrade to an empty database
-
-Equivalent to `alembic upgrade head` from the repo root, but works from any
-directory because it does not need alembic.ini.
-"""
+"""Run the Alembic migrations from Python without needing alembic.ini."""
 
 from __future__ import annotations
 
@@ -19,8 +12,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 
 def alembic_config(url: str | None = None) -> Config:
-    """An in-memory Alembic config pointing at db/migrations. ``url`` (any
-    form database_url() accepts) overrides AITY_DATABASE_URL."""
+    """Build an in-memory Alembic config for db/migrations, optionally with a database URL."""
     cfg = Config()
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("path_separator", "os")
@@ -30,14 +22,18 @@ def alembic_config(url: str | None = None) -> Config:
 
 
 def upgrade(url: str | None = None, revision: str = "head") -> None:
+    """Upgrade the database to a revision (default: head)."""
     command.upgrade(alembic_config(url), revision)
 
 
 def downgrade(url: str | None = None, revision: str = "base") -> None:
+    """Downgrade the database to a revision (default: base)."""
     command.downgrade(alembic_config(url), revision)
 
 
 def main(argv: list[str]) -> int:
+    """Upgrade to the given revision, or downgrade for 'base' or an option-like argument; return 0.
+    """
     target = argv[0] if argv else "head"
     if target == "base" or target.startswith("-"):
         downgrade(revision=target)

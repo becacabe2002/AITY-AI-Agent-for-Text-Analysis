@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""
-Pull the model lists of the cloud providers and save them as JSON.
-
-Same job as the BYOK sample's backend/utils/fetch_models.py, adapted to AITY:
-
-* Keys as in the smoke suite: GEMINI_API_KEY (GOOGLE_API_KEY also accepted),
-  OPENAI_API_KEY, ANTHROPIC_API_KEY - from the environment or the gitignored
-  repo-root .env (real environment variables win; values are never printed).
-* Writes var/models/models_<provider>.json (gitignored), all pages included.
-* Read-only: models.json is edited by hand (ADR-002, ADR-009). Ollama is not
-  covered; the operator chooses and pulls its model.
-
-Usage (repo root):
-    python scripts/fetch_models.py                  # all three providers
-    python scripts/fetch_models.py --provider anthropic
-"""
+"""Pull the model lists of the cloud providers and save them as JSON."""
 
 from __future__ import annotations
 
@@ -54,10 +39,12 @@ def load_dotenv(path: Path) -> None:
 
 
 def api_key(provider: str) -> str | None:
+    """Return the first configured API key for the provider, or None."""
     return next((os.environ[n] for n in KEY_ENV[provider] if os.environ.get(n, "").strip()), None)
 
 
 def fetch_gemini(key: str) -> list[dict[str, Any]]:
+    """List the Gemini models as JSON-ready dicts."""
     from google import genai
     from google.genai import types
 
@@ -66,6 +53,7 @@ def fetch_gemini(key: str) -> list[dict[str, Any]]:
 
 
 def fetch_openai(key: str) -> list[dict[str, Any]]:
+    """List the OpenAI models as JSON-ready dicts."""
     from openai import OpenAI
 
     client = OpenAI(api_key=key, timeout=TIMEOUT_S, max_retries=1)
@@ -73,6 +61,7 @@ def fetch_openai(key: str) -> list[dict[str, Any]]:
 
 
 def fetch_anthropic(key: str) -> list[dict[str, Any]]:
+    """List the Anthropic models as JSON-ready dicts."""
     from anthropic import Anthropic
 
     client = Anthropic(api_key=key, timeout=TIMEOUT_S, max_retries=1)
@@ -87,8 +76,26 @@ FETCHERS: dict[str, Callable[[str], list[dict[str, Any]]]] = {
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Pull the cloud providers' model lists.")
-    parser.add_argument("--provider", choices=[*FETCHERS, "all"], default="all")
+    """Fetch each requested provider's model list into var/models; return the exit code."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Pull the cloud providers' model lists and write them to var/models/models_<provider>.json.\n"
+            "API keys come from GEMINI_API_KEY (or GOOGLE_API_KEY), OPENAI_API_KEY and\n"
+            "ANTHROPIC_API_KEY, in the environment or the repo-root .env (the environment wins;\n"
+            "values are never printed). Read-only: models.json is edited by hand, and Ollama is\n"
+            "not covered."
+        ),
+        epilog=(
+            "examples (repo root):\n"
+            "  python scripts/fetch_models.py                  # all three providers\n"
+            "  python scripts/fetch_models.py --provider anthropic\n\n"
+            "exit codes: 0 if at least one list was written, 1 otherwise."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--provider", choices=[*FETCHERS, "all"], default="all", help="provider to fetch (default: all)"
+    )
     args = parser.parse_args(argv)
 
     load_dotenv(REPO_ROOT / ".env")

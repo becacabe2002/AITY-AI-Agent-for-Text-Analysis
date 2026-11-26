@@ -1,19 +1,4 @@
-"""Where document text files live - ADR-004 §7.5 / §7.7.
-
-Layout under AITY_UPLOADS_DIR (development: a local folder such as
-./var/uploads; Pouta: /srv/aity/uploads, bind-mounted from the Cinder volume):
-
-    {user_id}/{session_id}/{document_id}_{user_id}_{uploaded_at:%Y%m%dT%H%M%SZ}.txt
-
-Only UUIDs and a timestamp go into a path, so no user text reaches the
-filesystem; the original filename is stored as metadata on the row. The
-database stores the path relative to the root (Document.text_path).
-
-Writes go to a ".part" file that is renamed into place, so a crash never
-leaves a half-written text file under its final name. Deletes never raise:
-they run after a database commit, and a failed file delete must not undo a
-committed delete (it is logged; ADR-004 accepts the leftover file).
-"""
+"""File storage for the extracted text of uploaded documents."""
 
 from __future__ import annotations
 
@@ -36,13 +21,11 @@ class UploadsDirNotConfiguredError(RuntimeError):
 
 
 class UnsafeTextPathError(ValueError):
-    """A text_path that would leave the uploads root (never expected from
-    validated Document rows; checked anyway before touching the disk)."""
+    """A text path that would leave the uploads root."""
 
 
 def upload_timestamp(now: datetime) -> datetime:
-    """uploaded_at as stored: UTC, whole seconds, so the row and the
-    timestamp in the file name are the same instant."""
+    """Return the upload time as UTC with whole seconds."""
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("uploaded_at must be timezone-aware")
     return now.astimezone(timezone.utc).replace(microsecond=0)
@@ -58,6 +41,7 @@ def text_path_for(
 
 
 def session_dir_for(*, user_id: UUID, session_id: UUID) -> str:
+    """Return the relative folder of a user's session."""
     return PurePosixPath(str(user_id), str(session_id)).as_posix()
 
 
@@ -65,6 +49,7 @@ class UploadStorage:
     """File operations on the uploads root. One instance per process."""
 
     def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+        """Create the storage on a root folder or on $AITY_UPLOADS_DIR."""
         if root is None:
             root = os.environ.get(UPLOADS_DIR_ENV) or None
         if root is None:
@@ -97,8 +82,7 @@ class UploadStorage:
     # --- write / read ---
 
     def write(self, rel: str, data: bytes) -> None:
-        """Write via '<name>.part' + atomic rename. Creates the folders.
-        Raises FileExistsError rather than overwrite (document ids are unique)."""
+        """Write a file atomically via a .part file; never overwrite an existing one."""
         target = self.resolve(rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
@@ -115,18 +99,17 @@ class UploadStorage:
             raise
 
     def read_bytes(self, rel: str) -> bytes:
+        """Read a stored file as bytes."""
         return self.resolve(rel).read_bytes()
 
     def read_text(self, rel: str) -> str:
-        """The stored text (UTF-8, a BOM from a TXT upload is dropped).
-        Callers apply clean_text() before hashing or sending it to a model."""
+        """Read a stored file as UTF-8 text."""
         return decode_txt(self.read_bytes(rel))
 
     # --- delete (never raises) ---
 
     def delete(self, rel: str) -> bool:
-        """Remove one text file. Missing is fine. Returns False (and logs)
-        if it could not be removed."""
+        """Remove one text file; return False and log if it cannot be removed."""
         try:
             path = self.resolve(rel)
         except UnsafeTextPathError:
@@ -140,9 +123,7 @@ class UploadStorage:
             return False
 
     def remove_session_dir(self, *, user_id: UUID, session_id: UUID) -> bool:
-        """Remove a session's folder if it is empty (leftover '.part' files
-        from a crash are removed first); the user's folder is kept.
-        Returns False (and logs) if the folder is still there afterwards."""
+        """Remove a session's folder if it is empty; return False and log otherwise."""
         path = self.resolve(session_dir_for(user_id=user_id, session_id=session_id))
         if not path.exists():
             return True
@@ -157,6 +138,7 @@ class UploadStorage:
 
 
 def _quiet_unlink(path: Path) -> None:
+    """Delete a file, logging instead of raising."""
     try:
         path.unlink(missing_ok=True)
     except OSError:

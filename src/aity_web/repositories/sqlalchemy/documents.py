@@ -1,3 +1,5 @@
+"""PostgreSQL implementation of the document repository."""
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -11,7 +13,10 @@ from aity_web.repositories.sqlalchemy._common import SqlRepo
 
 
 class SqlAlchemyDocumentRepository(SqlRepo, DocumentRepository):
+    """SQLAlchemy implementation of DocumentRepository."""
+
     async def _require_session(self, user_id: UUID, session_id: UUID) -> None:
+        """Raise NotFoundError unless the session exists and belongs to the user."""
         found = (
             await self._execute(
                 select(sessions.c.id).where(sessions.c.id == session_id, sessions.c.user_id == user_id)
@@ -21,6 +26,7 @@ class SqlAlchemyDocumentRepository(SqlRepo, DocumentRepository):
             raise NotFoundError(f"session {session_id} not found")
 
     async def _owned(self, user_id: UUID, document_id: UUID) -> Document:
+        """Return the user's document or raise NotFoundError."""
         row = (
             await self._execute(
                 select(documents).where(documents.c.id == document_id, documents.c.user_id == user_id)
@@ -31,6 +37,7 @@ class SqlAlchemyDocumentRepository(SqlRepo, DocumentRepository):
         return Document.model_validate(row)
 
     async def add(self, *, user_id: UUID, document: Document) -> Document:
+        """Insert a document built by the service."""
         if document.user_id != user_id:
             raise ValueError("document.user_id does not match user_id")
         await self._require_session(user_id, document.session_id)
@@ -41,9 +48,11 @@ class SqlAlchemyDocumentRepository(SqlRepo, DocumentRepository):
         return document
 
     async def get(self, *, user_id: UUID, document_id: UUID) -> Document:
+        """Return one of the user's documents."""
         return await self._owned(user_id, document_id)
 
     async def list_for_session(self, *, user_id: UUID, session_id: UUID) -> list[Document]:
+        """List a session's documents, oldest upload first."""
         await self._require_session(user_id, session_id)
         result = await self._execute(
             select(documents)
@@ -53,6 +62,7 @@ class SqlAlchemyDocumentRepository(SqlRepo, DocumentRepository):
         return [Document.model_validate(r) for r in result]
 
     async def delete(self, *, user_id: UUID, document_id: UUID) -> Document:
+        """Delete a document and its analyses; return the deleted row."""
         row = await self._owned(user_id, document_id)
         # analyses go by ON DELETE CASCADE
         await self._execute(

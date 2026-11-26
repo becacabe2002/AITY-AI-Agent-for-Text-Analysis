@@ -1,4 +1,4 @@
-"""Small types shared by the W3 services."""
+"""Small types and helpers shared by the services."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from datetime import datetime, timezone
 from aity_web.repositories.base import UnitOfWork
 
 UowFactory = Callable[[], UnitOfWork]
-"""What services take: a fresh UnitOfWork per call (InMemoryStore.uow_factory
-in tests, make_uow_factory(engine) in the backend)."""
+"""Factory that returns a fresh UnitOfWork per call."""
 
 Clock = Callable[[], datetime]
 
 
 def utc_now() -> datetime:
+    """Return the current time in UTC."""
     return datetime.now(timezone.utc)

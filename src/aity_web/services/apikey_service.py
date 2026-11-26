@@ -1,25 +1,4 @@
-"""BYOK API keys for the three cloud providers - ADR-004 §9, ADR-005 (W4).
-
-Only gemini, openai and anthropic take a user key; AITY Built-in (Ollama)
-never needs one and is refused here.
-
-What is stored: cipher.encrypt() of a compact JSON payload
-    {"apiKey": "...", "provider": "openai"}
-(the payload shape from the BYOK decision; "baseURL" and "extra" are reserved
-for OpenAI-compatible overrides later and not written in v1). The provider
-inside the payload is checked on every read, so a ciphertext copied onto
-another provider's row is rejected.
-
-The cipher is injected:
-* W3: FakeCipher - reversible encoding, NOT encryption. Tests and
-  development only.
-* W4: a Fernet cipher reading the master key from /run/secrets/master.key
-  (ADR-005), with the same two methods.
-
-Plaintext keys only exist in this service and in the caller's local variable
-(run_analysis passes it straight to the adapter). They are never logged,
-never put in exception messages and never returned by list_keys().
-"""
+"""Service for storing and reading users' encrypted cloud-provider API keys (BYOK)."""
 
 from __future__ import annotations
 
@@ -46,23 +25,28 @@ class CipherError(Exception):
 
 @runtime_checkable
 class Cipher(Protocol):
-    def encrypt(self, plaintext: bytes) -> bytes: ...
+    """Encrypts and decrypts the stored key payload."""
+
+    def encrypt(self, plaintext: bytes) -> bytes:
+        """Encrypt bytes."""
+        ...
 
     def decrypt(self, ciphertext: bytes) -> bytes:
-        """CipherError if the ciphertext is not valid for this cipher."""
+        """Decrypt bytes; raise CipherError if they are not valid for this cipher."""
         ...
 
 
 class FakeCipher:
-    """W3 stand-in for Fernet: a tagged base64 encoding. NOT ENCRYPTION -
-    anyone with database access can read the keys. Never use it on Pouta."""
+    """Test-only reversible encoding that is NOT encryption."""
 
     _TAG = b"aity-fake-v1:"
 
     def encrypt(self, plaintext: bytes) -> bytes:
+        """Encode bytes with a tag; not secure."""
         return self._TAG + base64.urlsafe_b64encode(plaintext)
 
     def decrypt(self, ciphertext: bytes) -> bytes:
+        """Decode bytes made by encrypt(); raise CipherError otherwise."""
         if not ciphertext.startswith(self._TAG):
             raise CipherError("not a FakeCipher ciphertext")
         try:
@@ -87,8 +71,7 @@ class InvalidApiKeyError(ApiKeyError):
 
 
 class StoredKeyUnreadableError(ApiKeyError):
-    """The stored ciphertext cannot be decrypted or does not hold a key for
-    this provider. The user has to enter the key again."""
+    """The stored key cannot be decrypted; the user must enter it again."""
 
 
 # --- service ---
@@ -104,7 +87,10 @@ class ApiKeyInfo:
 
 
 class ApiKeyService:
+    """Stores, reads, lists and deletes a user's cloud-provider API keys."""
+
     def __init__(self, uow_factory: UowFactory, cipher: Cipher) -> None:
+        """Create the service with a unit-of-work factory and a cipher."""
         self._uow_factory = uow_factory
         self._cipher = cipher
 
@@ -114,8 +100,7 @@ class ApiKeyService:
     async def set_key(
         self, *, user_id: UUID, provider: str, api_key: str
     ) -> ApiKeyInfo:
-        """Store or replace the user's key for a provider (surrounding
-        whitespace is stripped). NotFoundError if the user is unknown."""
+        """Store or replace the user's key for a provider and return its metadata."""
         provider = _check_provider(provider)
         key = _check_key(api_key)
         payload = json.dumps(
@@ -130,8 +115,7 @@ class ApiKeyService:
         return ApiKeyInfo(provider=row.provider, created_at=row.created_at, updated_at=row.updated_at)
 
     async def get_key(self, *, user_id: UUID, provider: str) -> str | None:
-        """The plaintext key, or None if the user has none for this provider.
-        StoredKeyUnreadableError if the stored value cannot be decrypted."""
+        """Return the plaintext key, or None if none is stored."""
         provider = _check_provider(provider)
         async with self._uow_factory() as uow:
             row = await uow.credentials.get(user_id=user_id, provider=provider)
@@ -140,7 +124,7 @@ class ApiKeyService:
         return self._open(row.ciphertext, provider)
 
     async def list_keys(self, *, user_id: UUID) -> list[ApiKeyInfo]:
-        """Which providers have a stored key (no decryption, no plaintext)."""
+        """List which providers have a stored key, without decrypting anything."""
         async with self._uow_factory() as uow:
             rows = await uow.credentials.list(user_id=user_id)
         return [
@@ -149,13 +133,14 @@ class ApiKeyService:
         ]
 
     async def delete_key(self, *, user_id: UUID, provider: str) -> None:
-        """NotFoundError if the user has no key for this provider."""
+        """Delete the user's key for a provider."""
         provider = _check_provider(provider)
         async with self._uow_factory() as uow:
             await uow.credentials.delete(user_id=user_id, provider=provider)
             await uow.commit()
 
     def _open(self, ciphertext: bytes, provider: str) -> str:
+        """Decrypt a stored key and check that it belongs to the provider."""
         try:
             payload = json.loads(self._cipher.decrypt(ciphertext).decode("utf-8"))
         except (CipherError, UnicodeDecodeError, ValueError):
@@ -171,10 +156,12 @@ class ApiKeyService:
 
 
 def _provider_mismatch(payload: object, provider: str) -> bool:
+    """True if the decrypted payload names another provider."""
     return not isinstance(payload, dict) or payload.get("provider") != provider
 
 
 def _check_provider(provider: str) -> CloudProviderName:
+    """Check that the provider takes a user key and return it."""
     if provider not in CLOUD_PROVIDER_NAMES:
         if provider == "ollama":
             raise UnsupportedKeyProviderError("AITY Built-in does not use an API key")
@@ -185,6 +172,7 @@ def _check_provider(provider: str) -> CloudProviderName:
 
 
 def _check_key(api_key: str) -> str:
+    """Validate and strip an API key."""
     if not isinstance(api_key, str):
         raise InvalidApiKeyError("the API key must be text")
     key = api_key.strip()

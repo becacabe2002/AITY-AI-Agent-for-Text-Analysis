@@ -1,10 +1,4 @@
-"""Async engine and session factory (SQLAlchemy 2.0 asyncio + asyncpg).
-
-The URL comes from the argument, else from AITY_DATABASE_URL. A plain
-``postgresql://`` or ``postgres://`` URL is switched to the asyncpg driver,
-so the same value can be shared with psql-style tools; any other driver is
-refused.
-"""
+"""Async SQLAlchemy engine and session factory for PostgreSQL (asyncpg)."""
 
 from __future__ import annotations
 
@@ -24,7 +18,7 @@ class DatabaseConfigError(RuntimeError):
 
 
 def database_url(url: str | None = None, *, env: str = DATABASE_URL_ENV) -> str:
-    """Return the asyncpg URL: argument -> $env. Raises DatabaseConfigError."""
+    """Return the asyncpg database URL from the argument or the environment."""
     raw = url if url is not None else os.environ.get(env, "")
     raw = raw.strip()
     if not raw:
@@ -45,8 +39,7 @@ def database_url(url: str | None = None, *, env: str = DATABASE_URL_ENV) -> str:
 
 
 def make_engine(url: str | None = None, **kwargs: Any) -> AsyncEngine:
-    """Create the async engine. Extra kwargs go to create_async_engine
-    (tests pass poolclass=NullPool). Does not connect yet."""
+    """Create the async engine from a URL or the environment; nothing connects yet."""
     options: dict[str, Any] = {
         "pool_pre_ping": True,
         "connect_args": {"server_settings": {"timezone": "UTC", "application_name": "aity_web"}},
@@ -56,6 +49,5 @@ def make_engine(url: str | None = None, **kwargs: Any) -> AsyncEngine:
 
 
 def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    """One AsyncSession per request or job (ADR-004 §3.5).
-    expire_on_commit=False: the unit of work keeps working after commit()."""
+    """Build the factory that opens one AsyncSession per request or job."""
     return async_sessionmaker(engine, expire_on_commit=False, autoflush=False)

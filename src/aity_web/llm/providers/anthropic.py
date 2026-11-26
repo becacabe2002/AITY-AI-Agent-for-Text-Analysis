@@ -1,14 +1,4 @@
-"""Anthropic adapter: Messages API with native JSON outputs (output_config.format).
-
-* Structured output uses `output_config.format` (json_schema), so the JSON
-  arrives as plain text in a text block - same handling as OpenAI. Supported
-  on Claude Sonnet 4.5 / Haiku 4.5 / Opus 4.5 and newer; older models are not
-  offered for sessions.
-* Thinking is off unless the caller passes `thinking` (the API's own dict,
-  e.g. {"type": "enabled", "budget_tokens": 2048}).
-* SDK exceptions (anthropic.APIError) propagate unchanged; ModelHandle
-  maps them to ProviderError (aity_web.llm.errors).
-"""
+"""Anthropic adapter using the Messages API with JSON outputs."""
 
 from __future__ import annotations
 
@@ -43,6 +33,8 @@ _PASSTHROUGH: dict[str, str] = {
 
 
 class AnthropicProvider(BaseProviderAdapter):
+    """Adapter for Anthropic Claude models."""
+
     name = "anthropic"
     requires_api_key = True
 
@@ -60,6 +52,7 @@ class AnthropicProvider(BaseProviderAdapter):
         response_schema: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> ProviderResponse:
+        """Call the Messages API and return a ProviderResponse."""
         key = self._require_api_key(api_key)
         request = self._build_request(model, messages, system_prompt, response_schema, kwargs)
 
@@ -71,6 +64,7 @@ class AnthropicProvider(BaseProviderAdapter):
     # --- request ---
 
     def _make_client(self, api_key: str) -> AsyncAnthropic:
+        """Create the async client for one call."""
         return AsyncAnthropic(api_key=api_key, timeout=self.timeout_s, max_retries=self.max_retries)
 
     def _build_request(
@@ -81,6 +75,7 @@ class AnthropicProvider(BaseProviderAdapter):
         response_schema: Mapping[str, Any] | None,
         options: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Build the Messages API request, rejecting unsupported options."""
         unknown = set(options) - {"max_output_tokens", *_PASSTHROUGH}
         if unknown:
             raise TypeError(f"{self.name}: unsupported options {sorted(unknown)}")
@@ -106,6 +101,7 @@ class AnthropicProvider(BaseProviderAdapter):
     # --- response ---
 
     def _to_response(self, raw: Any, *, structured_call: bool) -> ProviderResponse:
+        """Convert the SDK response to a ProviderResponse."""
         finish = _FINISH_MAP.get(raw.stop_reason or "", "other")
         text = self._extract_text(raw.content)      # text blocks only; thinking blocks skipped
 
@@ -127,6 +123,7 @@ class AnthropicProvider(BaseProviderAdapter):
 
     @staticmethod
     def _usage(u: Any) -> TokenUsage:
+        """Convert Anthropic usage counts to TokenUsage."""
         if u is None:
             return TokenUsage()
         # input_tokens excludes prompt-cache reads/writes; add them so prompt_tokens is all input.

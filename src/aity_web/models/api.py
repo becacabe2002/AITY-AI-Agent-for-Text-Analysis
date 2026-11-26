@@ -1,21 +1,4 @@
-"""Request and response bodies for sessions, documents and analyses - ADR-004 §7.8.
-
-Plain Pydantic: the W5 FastAPI routes (web_ui/backend) use them as request
-bodies and response_model, and build the *Out models with from_domain().
-No FastAPI import here.
-
-    POST   /api/v1/sessions                    SessionCreate  -> 201 SessionOut
-    PATCH  /api/v1/sessions/{sid}              SessionUpdate  -> 200 SessionOut
-    DELETE /api/v1/sessions/{sid}                             -> 204
-    POST   /api/v1/sessions/{sid}/documents    (multipart)    -> 201 DocumentOut
-    POST   /api/v1/documents/{did}/analyses    AnalysisCreate -> 202 (job, ADR-006)
-    GET    /api/v1/analyses/{aid}                             -> 200 AnalysisResultOut
-
-What never leaves the server: user_id, Document.text_path and text_sha256,
-AnalysisResult.content_hash / cache_key_version, sustainability.warnings.
-No request accepts a prompt variant (the operator sets it); extra fields in a
-request body are refused (422), so a client cannot sneak one in.
-"""
+"""Request and response bodies for the session, document and analysis endpoints."""
 
 from __future__ import annotations
 
@@ -41,6 +24,8 @@ _RESPONSE = ConfigDict(extra="forbid", frozen=True)
 
 
 class SessionCreate(BaseModel):
+    """Request body to create a session."""
+
     model_config = _REQUEST
 
     name: SessionName
@@ -48,8 +33,7 @@ class SessionCreate(BaseModel):
 
 
 class SessionUpdate(BaseModel):
-    """PATCH body. An omitted field is left unchanged; description=null (or
-    blank) clears the description; name cannot be null."""
+    """PATCH body: omitted fields stay unchanged and a null description clears it."""
 
     model_config = _REQUEST
 
@@ -58,17 +42,19 @@ class SessionUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _name_not_null(self) -> SessionUpdate:
+        """Reject an explicit null name."""
         if "name" in self.model_fields_set and self.name is None:
             raise ValueError("name cannot be null")
         return self
 
     def changes(self) -> dict[str, Any]:
-        """Only the fields the client sent, ready for SessionService.update(**changes)
-        (fields left out stay UNSET there)."""
+        """Return only the fields the client sent."""
         return {name: getattr(self, name) for name in self.model_fields_set}
 
 
 class SessionOut(BaseModel):
+    """A session as the API returns it, with its document count."""
+
     model_config = _RESPONSE
 
     id: UUID
@@ -80,6 +66,7 @@ class SessionOut(BaseModel):
 
     @classmethod
     def from_domain(cls, session: Session, *, document_count: int) -> SessionOut:
+        """Build the response from a session and its document count."""
         return cls(
             id=session.id, name=session.name, description=session.description,
             document_count=document_count,
@@ -91,6 +78,8 @@ class SessionOut(BaseModel):
 
 
 class DocumentOut(BaseModel):
+    """A document as the API returns it (no paths or hashes)."""
+
     model_config = _RESPONSE
 
     id: UUID
@@ -102,6 +91,7 @@ class DocumentOut(BaseModel):
 
     @classmethod
     def from_domain(cls, document: Document) -> DocumentOut:
+        """Build the response from a document."""
         return cls(
             id=document.id, session_id=document.session_id,
             original_filename=document.original_filename, source_type=document.source_type,
@@ -113,7 +103,7 @@ class DocumentOut(BaseModel):
 
 
 class AnalysisCreate(BaseModel):
-    """The user picks provider and model; the prompt variant is the operator's."""
+    """Request body to start an analysis: the user picks provider and model."""
 
     model_config = _REQUEST
 
@@ -122,7 +112,7 @@ class AnalysisCreate(BaseModel):
 
 
 class SustainabilityOut(BaseModel):
-    """SustainabilityMetrics without the server-side warnings[]."""
+    """Sustainability metrics as the API returns them, without server-side warnings."""
 
     model_config = _RESPONSE
 
@@ -135,12 +125,12 @@ class SustainabilityOut(BaseModel):
 
     @classmethod
     def from_domain(cls, metrics: SustainabilityMetrics) -> SustainabilityOut:
+        """Build the response from the stored metrics."""
         return cls(**metrics.model_dump(exclude={"warnings"}))
 
 
 class AnalysisResultOut(BaseModel):
-    """What the API returns for one analysis. cache_hit lives here, never on
-    the row (False until the W6 cache lookup)."""
+    """An analysis as the API returns it; cache_hit is reported here, never stored."""
 
     model_config = _RESPONSE
 
@@ -163,6 +153,7 @@ class AnalysisResultOut(BaseModel):
 
     @classmethod
     def from_domain(cls, result: AnalysisResult, *, cache_hit: bool = False) -> AnalysisResultOut:
+        """Build the response from a stored result."""
         return cls(
             analysis_id=result.analysis_id, session_id=result.session_id,
             document_id=result.document_id, provider=result.provider, model=result.model,

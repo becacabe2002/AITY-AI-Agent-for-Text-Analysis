@@ -1,3 +1,5 @@
+"""Domain model of the persisted record of one analysis."""
+
 from __future__ import annotations
 
 from typing import Literal
@@ -17,16 +19,8 @@ AnalysisStatus = Literal["ok", "partial", "failed"]
 
 
 class AnalysisResult(BaseModel):
-    """
-    The persisted record of one analysis.
-    Two layers: 
-    * `payload` is what the LLM generated (LLMAnalysisPayload)
-    * Other field is added by the service (provenance, usage, sustainability, cache key, audit). 
-    
-    One row = one analysis of one document with the provider/model
-    the user picked and the prompt variant the operator set.
-    The API never returns this model directly: AnalysisResultOut (W3 request / response models) drops user_id, content_hash 
-    and cache_key_version, hides sustainability.warnings and adds cache_hit.
+    """The stored record of one analysis: the LLM payload plus provenance, usage, sustainability and
+    audit fields.
     """
     model_config = DOMAIN_CONFIG
 
@@ -62,14 +56,6 @@ class AnalysisResult(BaseModel):
     truncation_warning: str | None = None
 
     # Audit
-    """
-    Status rules (checked by the validator):
-
-    status   payload   token_usage   error
-    ok       set       set           None
-    partial  set       set           payload issues, joined into one line
-    failed   None      set or None   short sanitised reason
-    """
     status: AnalysisStatus
     error: str | None = None
     created_at: UtcDatetime
@@ -77,6 +63,7 @@ class AnalysisResult(BaseModel):
 
     @model_validator(mode="after")
     def _check_consistency(self) -> AnalysisResult:
+        """Enforce the status, payload, error, cache and timestamp rules of a row."""
         has_error = bool(self.error and self.error.strip())
 
         if self.status == "failed":

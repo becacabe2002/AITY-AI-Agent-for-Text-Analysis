@@ -1,3 +1,5 @@
+"""PostgreSQL implementations of the repository interfaces."""
+
 from aity_web.repositories.sqlalchemy.analyses import SqlAlchemyAnalysisRepository
 from aity_web.repositories.sqlalchemy.documents import SqlAlchemyDocumentRepository
 from aity_web.repositories.sqlalchemy.sessions import SqlAlchemySessionRepository

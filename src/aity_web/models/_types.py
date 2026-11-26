@@ -1,8 +1,4 @@
-"""
-* UtcDatetime - timezone-aware datetime, normalised to UTC. A naive datetime is rejected: Postgres columns are timestamptz and every timestamp is UTC.
-* Sha256Hex   - lowercase 64-character hex digest (text_sha256, content_hash).
-* Name        - stripped, 1-200 characters (model ids, prompt variant names).
-"""
+"""Shared field types and Pydantic settings for the domain models."""
 
 from __future__ import annotations
 
@@ -13,6 +9,7 @@ from pydantic import AfterValidator, AwareDatetime, ConfigDict, StringConstraint
 
 
 def _to_utc(value: datetime) -> datetime:
+    """Convert an aware datetime to UTC."""
     return value.astimezone(timezone.utc)
 
 

@@ -1,11 +1,4 @@
-"""Alembic environment for aity_web (async, asyncpg).
-
-URL: the config's sqlalchemy.url when a caller set it (tests, db.migrate),
-otherwise AITY_DATABASE_URL. alembic.ini never holds a URL.
-
-Autogenerate compares aity_web.db.tables.metadata with the database, column
-types and server defaults included; it does not read the Pydantic models.
-"""
+"""Alembic environment for aity_web: async migrations against the metadata in db/tables."""
 
 from __future__ import annotations
 
@@ -28,6 +21,7 @@ target_metadata = metadata
 
 
 def _url() -> str:
+    """Return the database URL from the Alembic config, else from the environment."""
     return database_url(config.get_main_option("sqlalchemy.url") or None)
 
 
@@ -45,6 +39,7 @@ def run_migrations_offline() -> None:
 
 
 def _run(connection: Connection) -> None:
+    """Configure Alembic on a live connection and run the migrations."""
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -58,6 +53,7 @@ def _run(connection: Connection) -> None:
 
 
 async def _run_online() -> None:
+    """Open an unpooled engine and run the migrations on it."""
     engine = make_engine(_url(), poolclass=pool.NullPool)
     try:
         async with engine.connect() as connection:
@@ -67,6 +63,7 @@ async def _run_online() -> None:
 
 
 def run_migrations_online() -> None:
+    """Run the migrations online, on a worker thread if an event loop is already running."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:

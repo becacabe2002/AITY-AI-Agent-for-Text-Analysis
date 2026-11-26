@@ -1,8 +1,4 @@
-"""
-Services depend on the ABCs in base.py and receive a UnitOfWork factory.
-memory.py holds in-memory fakes used only in tests; the SQLAlchemy
-implementations (Postgres) live in repositories/sqlalchemy/ (W3 Group B).
-"""
+"""Repository interfaces, the unit of work and in-memory fakes that services depend on."""
 
 from aity_web.repositories.base import (
     DEFAULT_PAGE_SIZE,

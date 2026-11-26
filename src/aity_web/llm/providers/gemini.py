@@ -1,10 +1,4 @@
-"""Gemini adapter: google-genai async client with JSON Schema structured output.
-
-* Structured output uses `response_json_schema` (full JSON Schema), not the
-  legacy OpenAPI-subset `response_schema`.
-* SDK exceptions (google.genai.errors.APIError) propagate unchanged;
-  ModelHandle maps them to ProviderError (aity_web.llm.errors).
-"""
+"""Gemini adapter using the google-genai async client with JSON Schema output."""
 
 from __future__ import annotations
 
@@ -45,6 +39,8 @@ _THINKING: tuple[str, ...] = ("thinking_budget", "thinking_level")
 
 
 class GeminiProvider(BaseProviderAdapter):
+    """Adapter for Google Gemini models."""
+
     name = "gemini"
     requires_api_key = True
 
@@ -63,6 +59,7 @@ class GeminiProvider(BaseProviderAdapter):
         response_schema: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> ProviderResponse:
+        """Call generate_content and return a ProviderResponse."""
         key = self._require_api_key(api_key)
         config = self._build_config(system_prompt, response_schema, kwargs)
         contents = self._contents(messages)
@@ -77,7 +74,7 @@ class GeminiProvider(BaseProviderAdapter):
     # --- request ---
 
     def _make_client(self, api_key: str) -> Any:
-        """Async client (`genai.Client(...).aio`), closed by `async with`."""
+        """Create the async client for one call."""
         http_options = types.HttpOptions(
             timeout=int(self.timeout_s * 1000),     # milliseconds
             retry_options=types.HttpRetryOptions(attempts=self.retry_attempts),
@@ -86,6 +83,7 @@ class GeminiProvider(BaseProviderAdapter):
 
     @staticmethod
     def _contents(messages: Sequence[Message]) -> list[types.Content]:
+        """Convert messages to Gemini content objects."""
         return [
             types.Content(role=_ROLE_MAP[m["role"]], parts=[types.Part(text=m["content"])])
             for m in messages
@@ -97,6 +95,7 @@ class GeminiProvider(BaseProviderAdapter):
         response_schema: Mapping[str, Any] | None,
         options: Mapping[str, Any],
     ) -> types.GenerateContentConfig:
+        """Build the generation config, rejecting unsupported options."""
         unknown = set(options) - {"max_output_tokens", *_PASSTHROUGH, *_THINKING}
         if unknown:
             raise TypeError(f"{self.name}: unsupported options {sorted(unknown)}")
@@ -130,6 +129,7 @@ class GeminiProvider(BaseProviderAdapter):
     # --- response ---
 
     def _to_response(self, raw: Any, *, structured_call: bool) -> ProviderResponse:
+        """Convert the SDK response to a ProviderResponse."""
         candidates = raw.candidates or []
 
         if not candidates:                           # prompt blocked before generation
@@ -153,10 +153,12 @@ class GeminiProvider(BaseProviderAdapter):
 
     @staticmethod
     def _enum_name(value: Any) -> str:
+        """Return the name of an enum value as text."""
         return str(getattr(value, "value", value) or "")
 
     @staticmethod
     def _usage(u: Any) -> TokenUsage:
+        """Convert Gemini usage counts to TokenUsage."""
         if u is None:
             return TokenUsage()
         candidates = u.candidates_token_count

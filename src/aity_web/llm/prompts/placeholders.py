@@ -1,9 +1,4 @@
-"""Reserved variant names with no text yet.
-
-They need their own output schemas (the analysis service only knows
-LLMAnalysisPayload today), so they cannot be rendered. Reserving the names
-keeps them from being reused for something else later.
-"""
+"""Reserved prompt variant names that have no text yet."""
 
 from aity_web.llm.prompts.base import PromptVariant
 

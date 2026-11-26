@@ -1,41 +1,5 @@
-"""Analysis service: analyze() is the provider-only core; AnalysisService
-.run_analysis() puts it on a stored document and saves the result (ADR-004 §7.4).
-
-    result = await AnalysisService(uow_factory, storage, apikeys).run_analysis(
-        user_id=uid, document_id=did, provider="gemini", model="gemini-3.5-flash-lite")
-
-run_analysis() - two short transactions, the LLM call with none open:
-  1. read: load the document (owner only), check the provider/model with the
-     registry, read + clean its text, compute content_hash, get the user's
-     API key from ApiKeyService (its own short read)
-  2. analyze() - no transaction open; can take minutes on AITY Built-in
-  3. write: map the AnalysisOutcome to an AnalysisResult (failed rows
-     included), insert it, bump the session's updated_at, commit
-The W5 job runner wraps run_analysis(); routes never call analyze() directly
-(a review rule, no import-linter contract). W6 adds the cache lookup between
-1 and 2 (ADR-008); truncation stays False until ADR-007.
-
-analyze(text, config, api_key) - one document, one provider call, no
-persistence. Its signature is unchanged since W2 so the unit tests and the
-smoke suite keep calling it:
-
-    catalogue/registry -> prompt library -> [shim start] -> timed adapter.complete()
-    -> [shim stop] -> parse + validate + normalise -> SustainabilityCollector
-
-Rules for analyze():
-* Config mistakes (unknown provider/model/variant, missing key, empty text)
-  raise before any network call. Everything that goes wrong AFTER the call
-  starts becomes status="failed" with a short sanitised `error`; the raw
-  model output and exception text go to the server log only.
-* latency_seconds times adapter.complete() only; the Ollama shim calls sit
-  outside the timer (ADR-003 §7.3) and the shim is always stopped.
-* Sustainability never fails an analysis (the collector never raises).
-
-Still to come: the ADR-008 one-shot retry (W6, inside analyze()), the
-content-hash cache lookup (W6, inside run_analysis()), truncation (ADR-007),
-and the async job queue and concurrency ceiling (ADR-006, W5).
-Provider exceptions arrive as ProviderError(kind=...) from ModelHandle
-(ADR-002 §7.7); their user_message becomes the outcome's `error`.
+"""Analysis service: analyze() makes one provider call; AnalysisService stores results for
+documents.
 """
 
 from __future__ import annotations
@@ -81,7 +45,7 @@ log = logging.getLogger(__name__)
 AnalysisStatus = Literal["ok", "partial", "failed"]
 
 ANALYSIS_PROMPT_VARIANT = DEFAULT_PROMPT_VARIANT
-"""The operator's prompt variant for analyses; requests never choose one."""
+"""Prompt variant used for analyses, set by the operator."""
 
 _RAW_LOG_CHARS = 2000
 
@@ -91,28 +55,16 @@ class MissingApiKeyError(ValueError):
 
 
 class DocumentTextError(RuntimeError):
-    """The document's stored text file is missing, unreadable, or no longer
-    matches the text_sha256 recorded at upload. Raised before any provider
-    call; the message is safe to show (no path, no text)."""
+    """The stored document text is missing, unreadable or changed since upload."""
 
 
 class DocumentGoneError(NotFoundError):
-    """The document (or its session) was deleted while the analysis ran;
-    the result was not saved."""
+    """The document was deleted while the analysis ran; the result was not saved."""
 
 
 @dataclass(frozen=True, slots=True)
 class AnalysisOutcome:
-    """What the stub returns. NOT the persisted AnalysisResult (that is W3).
-
-    * status         - "ok"; "partial" = valid payload with semantic issues
-      (payload_issues); "failed" = no usable payload (see `error`)
-    * payload        - normalised LLMAnalysisPayload; None when failed
-    * issues         - semantic shortfalls behind a "partial" status
-    * error          - short, sanitised reason; None unless failed
-    * finish_reason  - from the provider; None if the call itself raised
-    * prompt_profile - template profile actually rendered ("standard" | "small")
-    """
+    """Outcome of one provider analysis, before it becomes a stored AnalysisResult."""
 
     status: AnalysisStatus
     provider: str
@@ -128,12 +80,13 @@ class AnalysisOutcome:
 
     @property
     def ok(self) -> bool:
+        """True unless the analysis failed."""
         return self.status != "failed"
 
 
 @lru_cache(maxsize=1)
 def default_registry() -> LLMProviderRegistry:
-    """Built on first use, so $AITY_OLLAMA_BASE_URL is read then (not at import)."""
+    """Return the shared provider registry, built on first use."""
     return build_default_registry()
 
 
@@ -145,17 +98,7 @@ async def analyze(
     registry: LLMProviderRegistry | None = None,
     shim: OllamaTrackShim | None = None,
 ) -> AnalysisOutcome:
-    """Analyse one document with the provider/model/prompt in `config`.
-
-    `api_key` is the plaintext BYOK key for gemini/openai/anthropic; it is
-    ignored for ollama. `registry` and `shim` are test seams (defaults: the
-    four production adapters, and a shim client on $AITY_OLLAMA_SHIM_URL).
-
-    Raises (before any provider call): UnknownProviderError,
-    UnknownModelError, ModelNotActiveError (an AITY Built-in model other
-    than the operator's active one), UnknownPromptVariantError,
-    PromptVariantNotAvailableError, MissingApiKeyError, ValueError (empty text).
-    """
+    """Analyse one document with the provider, model and prompt in config."""
     registry = registry or default_registry()
     handle = registry.create(config.provider, config.model)
 
@@ -228,8 +171,7 @@ async def analyze(
 async def _call(
     handle: ModelHandle, api_key: str | None, prompt: RenderedPrompt
 ) -> tuple[ProviderResponse | None, Exception | None]:
-    """Run the adapter; an exception is returned, not raised, so the caller
-    can still stop the shim and build a failed outcome with its latency."""
+    """Run the adapter and return its response or its exception instead of raising."""
     try:
         resp = await handle.complete(
             api_key=api_key,
@@ -244,16 +186,14 @@ async def _call(
 
 
 def _call_error_text(exc: Exception) -> str:
-    """Sanitised. ProviderError: its user_message (no SDK text). Anything
-    else: the exception type only, because its message can echo request
-    details; the full text stays in the log."""
+    """Return a sanitised error text for a failed provider call."""
     if isinstance(exc, ProviderError):
         return exc.user_message
     return f"provider call failed ({type(exc).__name__})"
 
 
 def _response_failure(resp: ProviderResponse) -> str | None:
-    """Reason a response cannot yield a payload, or None if it can."""
+    """Return why a response cannot yield a payload, or None if it can."""
     if resp.finish_reason == "length":
         return "output hit the token limit"  # ADR-008 retry lands in W6
     if resp.finish_reason == "content_filter":
@@ -287,14 +227,7 @@ def outcome_to_result(
     finished_at: datetime,
     cache_key_version: int = CACHE_KEY_VERSION,
 ) -> AnalysisResult:
-    """Map what analyze() returned to the row that gets stored.
-
-    status   payload   token_usage                         error
-    ok       set       outcome.usage                       None
-    partial  set       outcome.usage                       issues joined with "; "
-    failed   None      usage if a response arrived, else   outcome.error
-                       None (the call raised)
-    """
+    """Map an AnalysisOutcome to the AnalysisResult row that gets stored."""
     if outcome.status == "failed":
         token_usage = outcome.usage if outcome.finish_reason is not None else None
         error = outcome.error or "analysis failed"
@@ -323,8 +256,7 @@ def outcome_to_result(
 
 
 class AnalysisService:
-    """Analyses of stored documents. One instance per process (W5 builds it
-    with the real unit-of-work factory, UploadStorage and ApiKeyService)."""
+    """Runs and stores analyses of stored documents."""
 
     def __init__(
         self,
@@ -337,6 +269,7 @@ class AnalysisService:
         clock: Clock = utc_now,
         new_id: Callable[[], UUID] = uuid4,
     ) -> None:
+        """Create the service with its unit-of-work factory, storage, key service and test seams."""
         self._uow_factory = uow_factory
         self._storage = storage
         self._apikeys = apikeys
@@ -348,22 +281,7 @@ class AnalysisService:
     async def run_analysis(
         self, *, user_id: UUID, document_id: UUID, provider: str, model: str
     ) -> AnalysisResult:
-        """Analyse one of the user's documents and store the result.
-
-        Raises before any provider call (nothing is stored):
-        * NotFoundError (document missing or not the user's)
-        * UnknownProviderError
-        * UnknownModelError
-        * ModelNotActiveError (ADR-009, HTTP 422 in W5)
-        * DocumentTextError
-        * MissingApiKeyError
-        * StoredKeyUnreadableError
-        and the prompt errors of analyze().
-
-        Raises after the call: 
-        * DocumentGoneError if the document was deleted meanwhile (the result is dropped and logged).
-        
-        Every other outcome, failed included, is stored and returned."""
+        """Analyse one of the user's documents and store the result, failed ones included."""
         registry = self._registry or default_registry()
 
         # --- 1. read: one short transaction for the row ---
@@ -412,27 +330,28 @@ class AnalysisService:
         return result
 
     async def get(self, *, user_id: UUID, analysis_id: UUID) -> AnalysisResult:
+        """Return one of the user's results."""
         async with self._uow_factory() as uow:
             return await uow.analyses.get(user_id=user_id, analysis_id=analysis_id)
 
     async def list_for_document(self, *, user_id: UUID, document_id: UUID) -> list[AnalysisResult]:
-        """Newest first. NotFoundError if the document is missing or not the user's."""
+        """List a document's results, newest first."""
         async with self._uow_factory() as uow:
             return await uow.analyses.list_for_document(user_id=user_id, document_id=document_id)
 
     async def list_for_session(self, *, user_id: UUID, session_id: UUID) -> list[AnalysisResult]:
-        """Newest first. NotFoundError if the session is missing or not the user's."""
+        """List a session's results, newest first."""
         async with self._uow_factory() as uow:
             return await uow.analyses.list_for_session(user_id=user_id, session_id=session_id)
 
     async def delete(self, *, user_id: UUID, analysis_id: UUID) -> None:
-        """Delete one result (no files involved)."""
+        """Delete one result."""
         async with self._uow_factory() as uow:
             await uow.analyses.delete(user_id=user_id, analysis_id=analysis_id)
             await uow.commit()
 
     async def _load_text(self, document: Document) -> str:
-        """The cleaned text, checked against the hash recorded at upload."""
+        """Read the document's cleaned text and check it against the hash recorded at upload."""
         try:
             raw = await asyncio.to_thread(self._storage.read_text, document.text_path)
         except (OSError, UnicodeDecodeError, ValueError) as exc:

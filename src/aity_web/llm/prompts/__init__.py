@@ -1,4 +1,4 @@
-"""Prompt library (ADR-002, W2). Variant names are immutable; see base.py."""
+"""Prompt library: the registered prompt variants and helpers to render them."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ PROMPT_VARIANTS: Mapping[str, PromptVariant] = MappingProxyType(
 
 
 def get_prompt_variant(name: str) -> PromptVariant:
+    """Return a prompt variant by name or raise UnknownPromptVariantError."""
     try:
         return PROMPT_VARIANTS[name]
     except KeyError:
@@ -40,6 +41,7 @@ def available_variants() -> tuple[PromptVariant, ...]:
 def render_prompt(
     name: str, document: str, *, profile: PromptProfile = "standard", **params: int
 ) -> RenderedPrompt:
+    """Render a prompt variant for a document."""
     return get_prompt_variant(name).render(document, profile=profile, **params)
 
 

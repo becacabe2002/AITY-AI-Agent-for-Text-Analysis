@@ -1,20 +1,4 @@
-"""AITY estimation shim - runs inside the ollama container (ADR-003 §7.4).
-
-MEASURES only: the container's own CPU time (cgroup v2 cpu.stat -> usage_usec)
-between start and stop, the wall-clock duration, the allotted vCPUs and the
-loaded model's size from Ollama's /api/ps. The backend turns these readings
-into energy and CO2e (aity_web.services.aity_cpu_model), so formula and
-constant changes never need a new ollama image. Bound to the internal Docker
-network only.
-
-Endpoints:
-  POST /internal/track/start                     -> {"track_id"}
-  POST /internal/track/stop {track_id, model?}   -> {"cpu_seconds": float | null,
-                                                     "duration_s", "vcpus",
-                                                     "resident_bytes": int | null,
-                                                     "model": str | null}
-  GET  /internal/track/health                    -> readiness + whether cpu.stat is readable
-"""
+"""Estimation shim inside the ollama container: measures CPU time and model size per call."""
 from __future__ import annotations
 
 import json
@@ -54,12 +38,15 @@ def resident_bytes(model: str | None) -> int | None:
 
 
 class StopRequest(BaseModel):
+    """Request body of the stop endpoint: the track to end and the model that ran."""
+
     track_id: str
     model: str | None = None
 
 
 @app.post("/internal/track/start")
 def start() -> dict:
+    """Begin a CPU-time track and return its id."""
     now = time.monotonic()
     track_id = str(uuid.uuid4())
     with _lock:
@@ -72,6 +59,7 @@ def start() -> dict:
 
 @app.post("/internal/track/stop")
 def stop(req: StopRequest) -> dict:
+    """End a track and return the raw readings; 404 for an unknown or expired track."""
     end_usec, end_t = read_cpu_usec(CGROUP_DIR), time.monotonic()
     with _lock:
         entry = _tracks.pop(req.track_id, None)
@@ -89,4 +77,5 @@ def stop(req: StopRequest) -> dict:
 
 @app.get("/internal/track/health")
 def health() -> dict:
+    """Report readiness and whether the cgroup CPU counter is readable."""
     return {"status": "ok", "cpu_stat_readable": read_cpu_usec(CGROUP_DIR) is not None}

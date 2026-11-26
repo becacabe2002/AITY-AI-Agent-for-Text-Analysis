@@ -1,23 +1,4 @@
-"""
-Backend-side client for the estimation shim in the ollama container
-
-The analysis service wraps adapter.complete() for provider="ollama" with
-start() / stop(), OUTSIDE the latency timer. OllamaProvider never calls this.
-
-Failures never raise: they log and return None, and SustainabilityCollector
-turns a None track result into estimate_status="unavailable".
-
-    track_id = await shim.start()
-    try:
-        with wall_clock() as t:
-            resp = await adapter.complete(...)
-    finally:
-        track = await shim.stop(track_id, model)   # always stop, even on failure
-    metrics = collect("ollama", resp, t.seconds, ollama_track_result=track)
-
-The CPU-time delta belongs to this one call only because AITY Built-in runs
-one job at a time (per-provider concurrency = 1, ADR-006).
-"""
+"""Backend client for the estimation shim in the ollama container."""
 
 from __future__ import annotations
 
@@ -33,12 +14,15 @@ DEFAULT_SHIM_URL = "http://ollama:8788"
 
 
 class OllamaTrackShim:
+    """Starts and stops CPU-time tracks on the shim; failures are logged, never raised."""
+
     def __init__(
         self,
         client: httpx.AsyncClient,
         base_url: str | None = None,
         timeout_s: float = 2.0,
     ) -> None:
+        """Create the client with an HTTP client, the shim URL and a timeout."""
         self._client = client
         self._base = (base_url or os.environ.get("AITY_OLLAMA_SHIM_URL", DEFAULT_SHIM_URL)).rstrip("/")
         self._timeout = timeout_s

@@ -1,4 +1,4 @@
-"""OpenAI adapter with chat completions with strict structured outputs."""
+"""OpenAI adapter using chat completions with strict structured outputs."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ _FINISH_MAP: dict[str, FinishReason] = {
 _PASSTHROUGH: tuple[str, ...] = ("temperature", "seed", "top_p", "stop", "reasoning_effort")
 
 class OpenAIProvider(BaseProviderAdapter):
+    """Adapter for OpenAI models."""
+
     name = "openai"
     requires_api_key = True
 
@@ -41,6 +43,7 @@ class OpenAIProvider(BaseProviderAdapter):
         response_schema: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> ProviderResponse:
+        """Call chat completions and return a ProviderResponse."""
         key = self._require_api_key(api_key)
         base_url = kwargs.pop("base_url", None) # None = api.openai.com
         request = self._build_request(model, messages, system_prompt, response_schema, kwargs)
@@ -53,6 +56,7 @@ class OpenAIProvider(BaseProviderAdapter):
     # --- request ---
 
     def _make_client(self, api_key: str, base_url: str | None) -> AsyncOpenAI:
+        """Create the async client for one call."""
         return AsyncOpenAI(
             api_key=api_key, base_url=base_url, timeout=self.timeout_s, max_retries=self.max_retries
         )
@@ -65,6 +69,7 @@ class OpenAIProvider(BaseProviderAdapter):
             response_schema: Mapping[str, Any] | None,
             options: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Build the chat completions request, rejecting unsupported options."""
         unknown = set(options) - {"max_output_tokens", *_PASSTHROUGH}
 
         if unknown:
@@ -99,6 +104,7 @@ class OpenAIProvider(BaseProviderAdapter):
     # --- response ---
 
     def _to_response(self, raw: Any, *, structured_call: bool) -> ProviderResponse:
+        """Convert the SDK response to a ProviderResponse."""
         choice = raw.choices[0]
         message = choice.message
 
@@ -119,6 +125,7 @@ class OpenAIProvider(BaseProviderAdapter):
 
     @staticmethod
     def _usage(u: Any) -> TokenUsage:
+        """Convert OpenAI usage counts to TokenUsage."""
         if u is None:
             return TokenUsage()
         details = u.completion_tokens_details

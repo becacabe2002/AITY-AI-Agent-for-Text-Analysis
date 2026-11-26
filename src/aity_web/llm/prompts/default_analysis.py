@@ -1,7 +1,5 @@
-"""default_analysis - summary, keywords and topics (LLMAnalysisPayload).
-
-IMMUTABLE: do not edit the text below. Ship a change as a new variant
-(e.g. default_analysis_v2) and leave this one as it is.
+"""Prompt variant default_analysis: summary, keywords and topics.
+IMMUTABLE: ship text changes as a new variant.
 """
 
 from aity_web.llm.prompts.base import PromptTemplate, PromptVariant

@@ -1,11 +1,4 @@
-"""
-Every row is an ESTIMATE; `estimation_source` says which method made it:
-* "ecologits"      - cloud providers, from model class + token counts
-* "aity_cpu_model" - AITY Built-in, from the ollama container's CPU time
-* None             - no estimate (estimate_status="unavailable")
-
-Only SustainabilityCollector (aity_web.services.sustainability) builds these.
-"""
+"""Domain model of the sustainability estimate stored with every analysis."""
 
 from __future__ import annotations
 
@@ -18,17 +11,7 @@ EstimationSource = Literal["ecologits", "aity_cpu_model"]
 
 
 class SustainabilityMetrics(BaseModel):
-    """Persisted as the `sustainability` JSONB column of analysis_results.
-
-    * energy_kwh / co2e_kg - None iff estimate_status="unavailable"
-    * estimate_status      - "ok": primary method, no degradation;
-      "partial": numbers present but the source flagged a degradation;
-      "unavailable": no numbers
-    * estimation_source    - None if estimate_status="unavailable"
-    * latency_seconds      - wall clock of adapter.complete() only; always set
-    * warnings             - server-side only, never returned by the API
-    * errors               - why the estimate is partial / unavailable
-    """
+    """Estimated energy and CO2e of one analysis, with how and how well it was estimated."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -42,6 +25,7 @@ class SustainabilityMetrics(BaseModel):
 
     @model_validator(mode="after")
     def _check_consistency(self) -> SustainabilityMetrics:
+        """Require numbers and a source unless the estimate is unavailable."""
         unavailable = self.estimate_status == "unavailable"
         has_numbers = self.energy_kwh is not None and self.co2e_kg is not None
         no_numbers = self.energy_kwh is None and self.co2e_kg is None
@@ -59,11 +43,7 @@ class SustainabilityMetrics(BaseModel):
     def unavailable(
         cls, latency_seconds: float, errors: list[str] | None = None
     ) -> SustainabilityMetrics:
-        """
-        A valid row with no estimate - the degradation path.
-        It will return an instance of SustainabilityMetrics 
-        with estimation_source, energy_kwh and co2e_kg all are None.
-        """
+        """Build a valid row that carries no estimate."""
         return cls(
             estimate_status="unavailable",
             latency_seconds=latency_seconds,
