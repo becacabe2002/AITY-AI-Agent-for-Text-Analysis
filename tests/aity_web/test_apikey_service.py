@@ -1,4 +1,4 @@
-"""apikey_service with the W3 FakeCipher and an injected test cipher."""
+"""apikey_service with FernetCipher and an injected test cipher."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 from uuid import uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 
 from _service_fixtures import StepClock, add_user
 from aity_web.repositories import NotFoundError
@@ -13,13 +14,11 @@ from aity_web.repositories.memory import InMemoryStore
 from aity_web.services.apikey_service import (
     API_KEY_MAX,
     ApiKeyService,
-    Cipher,
-    CipherError,
-    FakeCipher,
     InvalidApiKeyError,
     StoredKeyUnreadableError,
     UnsupportedKeyProviderError,
 )
+from aity_web.services.crypto import Cipher, CipherError, FernetCipher
 
 KEY = "sk-test-0123456789abcdef"
 
@@ -41,7 +40,11 @@ def store():
     return InMemoryStore(clock=StepClock())
 
 
-@pytest.fixture(params=[FakeCipher, XorCipher], ids=["fake", "xor"])
+def fernet() -> FernetCipher:
+    return FernetCipher(Fernet.generate_key())
+
+
+@pytest.fixture(params=[fernet, XorCipher], ids=["fernet", "xor"])
 def cipher(request):
     return request.param()
 
@@ -57,15 +60,7 @@ async def stored_ciphertext(store, user_id, provider):
 
 
 def test_ciphers_follow_the_protocol():
-    assert isinstance(FakeCipher(), Cipher) and isinstance(XorCipher(), Cipher)
-
-
-def test_fake_cipher_roundtrip_and_rejects_foreign_data():
-    c = FakeCipher()
-    assert c.decrypt(c.encrypt(b"abc")) == b"abc"
-    for bad in (b"abc", b"aity-fake-v1:***"):
-        with pytest.raises(CipherError):
-            c.decrypt(bad)
+    assert isinstance(fernet(), Cipher) and isinstance(XorCipher(), Cipher)
 
 
 @pytest.mark.asyncio
@@ -181,14 +176,47 @@ async def test_unreadable_payloads(store, service, cipher, payload):
 
 
 @pytest.mark.asyncio
-async def test_ciphertext_from_another_cipher_is_refused(store):
+@pytest.mark.parametrize("writer", [XorCipher, fernet], ids=["xor", "other-master-key"])
+async def test_ciphertext_from_another_cipher_is_refused(store, writer):
     alice = await add_user(store)
-    await ApiKeyService(store.uow_factory, XorCipher()).set_key(
+    await ApiKeyService(store.uow_factory, writer()).set_key(
         user_id=alice.id, provider="gemini", api_key=KEY
     )
     with pytest.raises(StoredKeyUnreadableError):
-        await ApiKeyService(store.uow_factory, FakeCipher()).get_key(user_id=alice.id, provider="gemini")
+        await ApiKeyService(store.uow_factory, fernet()).get_key(user_id=alice.id, provider="gemini")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_fields",
+    [{"baseURL": "https://openrouter.example/v1"}, {"extra": {"org": "o-1"}},
+     {"baseURL": "https://x.example", "extra": {}}],
+)
+async def test_optional_payload_fields_are_accepted(store, service, cipher, extra_fields):
+    alice = await add_user(store)
+    payload = json.dumps({"apiKey": KEY, "provider": "openai", **extra_fields}).encode()
+    async with store.uow_factory() as uow:
+        await uow.credentials.upsert(user_id=alice.id, provider="openai", ciphertext=cipher.encrypt(payload))
+        await uow.commit()
+    assert await service.get_key(user_id=alice.id, provider="openai") == KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_fields",
+    [{"baseURL": 5}, {"baseURL": None}, {"extra": "x"}, {"extra": ["a"]}, {"apiKey": 123}],
+)
+async def test_optional_payload_fields_with_wrong_types_are_refused(store, service, cipher, extra_fields):
+    alice = await add_user(store)
+    payload = json.dumps({"apiKey": KEY, "provider": "openai", **extra_fields}).encode()
+    async with store.uow_factory() as uow:
+        await uow.credentials.upsert(user_id=alice.id, provider="openai", ciphertext=cipher.encrypt(payload))
+        await uow.commit()
+    with pytest.raises(StoredKeyUnreadableError):
+        await service.get_key(user_id=alice.id, provider="openai")
 
 
 def test_repr_has_no_secrets(store):
-    assert "FakeCipher" in repr(ApiKeyService(store.uow_factory, FakeCipher()))
+    key = Fernet.generate_key()
+    text = repr(ApiKeyService(store.uow_factory, FernetCipher(key)))
+    assert "FernetCipher" in text and key.decode() not in text

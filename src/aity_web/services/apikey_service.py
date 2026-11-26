@@ -2,57 +2,16 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from aity_web.models.user_api_key import CLOUD_PROVIDER_NAMES, CloudProviderName
 from aity_web.services._common import UowFactory
+from aity_web.services.crypto import Cipher, CipherError
 
 API_KEY_MAX = 512
-
-
-# --- cipher ---
-
-
-class CipherError(Exception):
-    """A ciphertext could not be decrypted (corrupt, or another master key)."""
-
-
-@runtime_checkable
-class Cipher(Protocol):
-    """Encrypts and decrypts the stored key payload."""
-
-    def encrypt(self, plaintext: bytes) -> bytes:
-        """Encrypt bytes."""
-        ...
-
-    def decrypt(self, ciphertext: bytes) -> bytes:
-        """Decrypt bytes; raise CipherError if they are not valid for this cipher."""
-        ...
-
-
-class FakeCipher:
-    """Test-only reversible encoding that is NOT encryption."""
-
-    _TAG = b"aity-fake-v1:"
-
-    def encrypt(self, plaintext: bytes) -> bytes:
-        """Encode bytes with a tag; not secure."""
-        return self._TAG + base64.urlsafe_b64encode(plaintext)
-
-    def decrypt(self, ciphertext: bytes) -> bytes:
-        """Decode bytes made by encrypt(); raise CipherError otherwise."""
-        if not ciphertext.startswith(self._TAG):
-            raise CipherError("not a FakeCipher ciphertext")
-        try:
-            return base64.b64decode(ciphertext[len(self._TAG):], altchars=b"-_", validate=True)
-        except (binascii.Error, ValueError):
-            raise CipherError("not a FakeCipher ciphertext") from None
 
 
 # --- errors ---
@@ -140,24 +99,29 @@ class ApiKeyService:
             await uow.commit()
 
     def _open(self, ciphertext: bytes, provider: str) -> str:
-        """Decrypt a stored key and check that it belongs to the provider."""
+        """Decrypt a stored payload, check its shape and provider, and return the key."""
+        unreadable = StoredKeyUnreadableError(
+            f"the stored {provider} key cannot be read; enter it again"
+        )
         try:
             payload = json.loads(self._cipher.decrypt(ciphertext).decode("utf-8"))
         except (CipherError, UnicodeDecodeError, ValueError):
-            raise StoredKeyUnreadableError(
-                f"the stored {provider} key cannot be read; enter it again"
-            ) from None
-        key = payload.get("apiKey") if isinstance(payload, dict) else None
-        if _provider_mismatch(payload, provider) or not isinstance(key, str) or not key:
-            raise StoredKeyUnreadableError(
-                f"the stored {provider} key cannot be read; enter it again"
-            )
-        return key
+            raise unreadable from None
+        if not _payload_ok(payload, provider):
+            raise unreadable
+        return payload["apiKey"]
 
 
-def _provider_mismatch(payload: object, provider: str) -> bool:
-    """True if the decrypted payload names another provider."""
-    return not isinstance(payload, dict) or payload.get("provider") != provider
+def _payload_ok(payload: object, provider: str) -> bool:
+    """True if the payload is {apiKey, provider, baseURL?, extra?} for this provider."""
+    if not isinstance(payload, dict) or payload.get("provider") != provider:
+        return False
+    key = payload.get("apiKey")
+    if not isinstance(key, str) or not key:
+        return False
+    if "baseURL" in payload and not isinstance(payload["baseURL"], str):
+        return False
+    return "extra" not in payload or isinstance(payload["extra"], dict)
 
 
 def _check_provider(provider: str) -> CloudProviderName:
@@ -190,9 +154,6 @@ __all__ = [
     "ApiKeyError",
     "ApiKeyInfo",
     "ApiKeyService",
-    "Cipher",
-    "CipherError",
-    "FakeCipher",
     "InvalidApiKeyError",
     "StoredKeyUnreadableError",
     "UnsupportedKeyProviderError",

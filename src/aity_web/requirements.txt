@@ -18,6 +18,9 @@ sqlalchemy[asyncio]>=2.0,<2.1
 asyncpg>=0.29
 alembic>=1.16
 
+# --- Security (ADR-005): Fernet for stored API keys ---
+cryptography>=42
+
 # [crypto] pulls in cryptography so owner-password-only (AES) PDFs can be opened
 pypdf[crypto]>=5.0
 # iter_inner_content() (paragraphs and tables in order) needs 1.1+

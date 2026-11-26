@@ -1,7 +1,7 @@
 """run_analysis(): upload -> analyse -> stored AnalysisResult (ADR-004 §7.4).
 
 In-memory unit of work, a real UploadStorage in tmp_path, ApiKeyService with
-FakeCipher, and the scripted adapters from test_analysis_service. No network,
+FernetCipher, and the scripted adapters from test_analysis_service. No network,
 no database.
 """
 
@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 
 import aity_web.services.analysis_service as svc
 from _service_fixtures import StepClock, add_user
@@ -29,8 +30,9 @@ from aity_web.services.analysis_service import (
     MissingApiKeyError,
     outcome_to_result,
 )
-from aity_web.services.apikey_service import ApiKeyService, FakeCipher, StoredKeyUnreadableError
+from aity_web.services.apikey_service import ApiKeyService, StoredKeyUnreadableError
 from aity_web.services.cache_key import CACHE_KEY_VERSION, clean_text, content_hash, text_sha256
+from aity_web.services.crypto import FernetCipher
 from aity_web.services.document_service import DocumentService
 from aity_web.services.upload_storage import UploadStorage
 from test_analysis_service import GOOD, TRACK, FakeGemini, FakeOllama, FakeShim, _resp
@@ -52,7 +54,7 @@ class World:
     def __init__(self, tmp_path, *, gemini=None, ollama=None, pinned=None):
         self.store = InMemoryStore(clock=StepClock())
         self.storage = UploadStorage(tmp_path / "uploads")
-        self.apikeys = ApiKeyService(self.store.uow_factory, FakeCipher())
+        self.apikeys = ApiKeyService(self.store.uow_factory, FernetCipher(Fernet.generate_key()))
         self.registry = LLMProviderRegistry(load_catalog(), pinned=pinned)
         self.gem = FakeGemini(gemini if gemini is not None else _resp())
         self.oll = FakeOllama(ollama if ollama is not None else _resp())
